@@ -565,7 +565,7 @@ prepare_adjacency_matrix(int nrows, int ncols, int nvals,
       torch::TensorOptions().dtype(torch::kInt).requires_grad(false);
   auto options_float_tile =
       torch::TensorOptions().dtype(torch::kFloat).requires_grad(true);
-
+  nT nvals0 = nvals;
   SM adj0;
   adj0.clone_mtx(
     nrows,
@@ -633,8 +633,6 @@ prepare_adjacency_matrix(int nrows, int ncols, int nvals,
   global_bounds.push_back(total_bounds_graph_tile);
   global_segments.push_back(segments_graph_tile);
   global_bounds.push_back(total_bounds_graph_tile);
-  return std::make_shared<GALAGNN>(1433, 32, 7);
-#if 0
   torch::Device device(torch::kCUDA);
   auto options_cu_int = torch::TensorOptions()
                             .dtype(torch::kInt)
@@ -658,6 +656,7 @@ prepare_adjacency_matrix(int nrows, int ncols, int nvals,
   auto options_cu_long =
       torch::TensorOptions().dtype(torch::kLong).device(torch::kCUDA, 0);
 
+#if 0
   int *dL;
   float *dB;
   bool *d_train_mask, *d_valid_mask, *d_test_mask;
@@ -679,7 +678,6 @@ prepare_adjacency_matrix(int nrows, int ncols, int nvals,
                         nrows * sizeof(bool), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_test_mask, test_mask.vals_ptr(), nrows * sizeof(bool),
                         cudaMemcpyHostToDevice));
-
   torch::Tensor t_iden =
       torch::from_blob(dB, {nrows, emb_size}, options_cu_float_grad);
   torch::Tensor t_labs = torch::from_blob(dL, {nrows}, options_cu_long);
@@ -690,7 +688,7 @@ prepare_adjacency_matrix(int nrows, int ncols, int nvals,
       torch::from_blob(d_valid_mask, {nrows}, options_cu_bool);
   torch::Tensor t_test_mask =
       torch::from_blob(d_test_mask, {nrows}, options_cu_bool);
-
+#endif
   int *dA_csrOffsets0, *dA_columns0;
   // float *dA_values0;
 
@@ -720,7 +718,7 @@ prepare_adjacency_matrix(int nrows, int ncols, int nvals,
   global_offset_graph.push_back(t_offsets0);
   global_columns_graph.push_back(t_cols0);
   global_value_graph.push_back(t_vals0);
-
+#if 0
   int num_iters = 100;
   auto net = std::make_shared<GALAGNN>(1433, 32, 7);
   net->to(device);
@@ -763,6 +761,7 @@ prepare_adjacency_matrix(int nrows, int ncols, int nvals,
   std::cout << calc_mean(times_arr) << ","
             << calc_mean(times_arr) + calc_mean(times_arr_train) << std::endl;
   #endif
+  return std::make_shared<GALAGNN>(1433, 32, 7);
 }
     };
 

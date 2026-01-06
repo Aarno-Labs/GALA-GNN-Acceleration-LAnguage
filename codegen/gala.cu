@@ -528,7 +528,8 @@ struct GALAGNN : torch::nn::Module
       res = aggregate_node_mul_sum_coarse2_AutoGrad::apply(res, 0);
     }
     res = norm * res;
-    res = torch::relu(res);
+    res =
+ torch::relu(res);
     res = fc1->forward(res);
     res = norm * res;
     if (ep % mod_v == 0)
@@ -731,8 +732,8 @@ int main(int argc, char **argv)
     torch::Tensor labels_train = t_labs.index({t_train_mask});
     auto criterion = torch::nn::CrossEntropyLoss();
     torch::Tensor d_loss = criterion(prediction_train, labels_train);
-    d_loss.backward();
     std::cout << "d_loss " << d_loss << std::endl;
+    d_loss.backward();
     optimizer.step();
     cudaDeviceSynchronize();
     end_train = get_time();
@@ -742,6 +743,13 @@ int main(int argc, char **argv)
       times_arr_train.push_back(end_train - start_train);
     }
   }
+    torch::Tensor prediction =
+        net->forward(t_iden, 101, mod_v)[0];
+    torch::Tensor prediction_valid = prediction.index({t_valid_mask});
+    torch::Tensor labels_valid = t_labs.index({t_valid_mask});
+    auto criterion = torch::nn::CrossEntropyLoss();
+    torch::Tensor d_loss = criterion(prediction_valid, labels_valid);
+    std::cout << "d_loss" << d_loss << std::endl;
   CUDA_CHECK(cudaFree(dB));
   std::cout << calc_mean(times_arr) << ","
             << calc_mean(times_arr) + calc_mean(times_arr_train) << std::endl;

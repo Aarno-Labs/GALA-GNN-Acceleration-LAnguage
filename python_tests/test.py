@@ -37,17 +37,44 @@ def prepare_adj_matrix(m: sparse.csr_matrix):
     offsets
   )
 
-breakpoint()
 adj_mtx_sparse = load_adj_matrix()
-g = prepare_adj_matrix(adj_mtx_sparse)
+m = prepare_adj_matrix(adj_mtx_sparse)
 
-# # These are row major ..?
-# input_emb = numpy.load(DATA_PATH / "Feat.npy")
-# emb_size = input_emb.shape[1]
+# These are row major ..?
+input_emb = torch.from_numpy(numpy.load(DATA_PATH / "Feat.npy"))
+emb_size = input_emb.shape[1]
 
-# labels = numpy.load(DATA_PATH / "Lab.npy")
-# train_mask_load = numpy.load(DATA_PATH / "TnMsk.npy")
-# valid_mask_load = numpy.load(DATA_PATH / "VlMsk.npy")
-# test_mask_load = numpy.load(DATA_PATH / "TsMsk.npy")
+labels = torch.from_numpy(numpy.load(DATA_PATH / "Lab.npy"))
+train_mask_load = torch.from_numpy(numpy.load(DATA_PATH / "TnMsk.npy")).type(dtype=torch.bool)
+valid_mask_load = torch.from_numpy(numpy.load(DATA_PATH / "VlMsk.npy")).type(dtype=torch.bool)
+test_mask_load  = torch.from_numpy(numpy.load(DATA_PATH / "TsMsk.npy")).type(dtype=torch.bool)
 
-# classes = labels.max()
+classes = labels.max()
+
+# Move to device?
+device = torch.device('cuda:0')
+input_emb = input_emb.to(device=device)
+labels = labels.to(device=device)
+train_mask = train_mask_load.to(device=device)
+valid_mask = valid_mask_load.to(device=device)
+test_mask = test_mask_load.to(device=device)
+
+m.to(device=device, dtype=None)
+
+opt = torch.optim.Adam(m.parameters(), lr=0.01, weight_decay=5e-4)
+for epoch in range(100):
+  opt.zero_grad()
+  prediction = m.forward(input_emb, epoch, 1)[0]
+  prediction_train = prediction[train_mask.reshape(2708)]
+  labels_train = labels[train_mask.reshape(2708)]
+  criterion = torch.nn.CrossEntropyLoss()
+  d_loss = criterion(prediction_train, labels_train.reshape(140))
+  d_loss.backward()
+  opt.step()
+
+prediction = m.forward(input_emb, 100, 1)[0]
+predict_validate = prediction[valid_mask.reshape(2708)]
+labels_validate = labels[valid_mask.reshape(2708)]
+criterion = torch.nn.CrossEntropyLoss()
+d_loss = criterion(predict_validate, labels_validate.reshape(labels_validate.shape[0]))
+print(d_loss)
