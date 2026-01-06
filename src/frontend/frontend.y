@@ -66,8 +66,14 @@ bool print_accuracy = false;
 %type <vval> program schedule train_args
 %type <vval> layer_inits layer_init data_transform function_transform
 %type <vval> model model_def model_init model_uses model_use 
+%type <vval> library model_program
 
 %%
+library : model_program { m1.generate_main = false; }
+model_program : {} 
+  | statement model_program { } 
+  | layers model_def model_init schedules {}
+
 program : load_dataset algorithm schedules {}
 ;
 load_dataset : IDENTIFIER ASSIGN LOAD LPAREN string RPAREN SEMICOLON 
@@ -1032,22 +1038,28 @@ void generate_ir(){
     DataNode* graphData; 
     DataNode* featData;
     RelationEdge* graphFeatAssociation;
+
+    if (debug == 2) cout << "load dataset section with name " << m1.dataset_name << "\n";
+    auto loadDataset = new ForwardNode(POINTWISE, LOAD_OP);
+
     if (m1.dataset_name != "\0"){ // load dataset
-        if (debug == 2) cout << "load dataset section with name " << m1.dataset_name << "\n";
-        auto loadDataset = new ForwardNode(POINTWISE, LOAD_OP);
         loadDataset->addParam(m1.dataset_name);
-        // TODO Temp fix
-        graphData = createDataNode(CSR_STYPE, false, true, {0,0}, true, "adj0", INT32, INT32, F32);
-        featData = createDataNode(RM_DTYPE, false, false, {-1, -2}, true, "t_iden", INT32, INT32, F32);
-
-        // association between graph and features
-        graphFeatAssociation = new RelationEdge(graphData, ALL_RELATION, featData, ROWS_RELATION);
-        GALAFEContext::associations.push_back(graphFeatAssociation);
-        loadDataset->addOutputData(featData);
-        loadDataset->addOutputData(graphData);
-
-        GALAFEContext::program.push_back(loadDataset);
+    } else {
+        loadDataset->addParam("<input>");
     }
+    
+    // TODO Temp fix
+    graphData = createDataNode(CSR_STYPE, false, true, {0,0}, true, "adj0", INT32, INT32, F32);
+    featData = createDataNode(RM_DTYPE, false, false, {-1, -2}, true, "t_iden", INT32, INT32, F32);
+
+    // association between graph and features
+    graphFeatAssociation = new RelationEdge(graphData, ALL_RELATION, featData, ROWS_RELATION);
+    GALAFEContext::associations.push_back(graphFeatAssociation);
+    loadDataset->addOutputData(featData);
+    loadDataset->addOutputData(graphData);
+
+    GALAFEContext::program.push_back(loadDataset);
+     
     bool createdTransformedGraph = false;
     DataNode* graph;
     if (m1.data_transformations.size() > 0){ // need a transformed graph to be made

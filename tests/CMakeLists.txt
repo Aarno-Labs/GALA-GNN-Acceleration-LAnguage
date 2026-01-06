@@ -1,5 +1,6 @@
 
 include_directories(${CMAKE_CURRENT_BINARY_DIR} ../src/frontend)
+include_directories(${CMAKE_CURRENT_BINARY_DIR} ../include)
 
 BISON_TARGET(Parser ../src/frontend/frontend.y ${CMAKE_CURRENT_BINARY_DIR}/parser.cpp DEFINES_FILE ${CMAKE_CURRENT_BINARY_DIR}/parser.hpp)
 FLEX_TARGET(Lexer ../src/frontend/frontend.l ${CMAKE_CURRENT_BINARY_DIR}/lexer.cpp)

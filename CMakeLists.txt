@@ -347,3 +347,4 @@ message("CMAKE_EXE_LINKER_FLAGS - ${CMAKE_EXE_LINKER_FLAGS}")
 message("CMAKE_CXX_STANDARD_LIBRARIES - ${CMAKE_CXX_STANDARD_LIBRARIES}")
 
 add_subdirectory(tests)
+add_subdirectory(python)

@@ -1,3 +1,7 @@
+//#include <pybind11/pybind11.h>
+//#include <pybind11/stl.h>
+#include <torch/torch.h>
+#include <torch/extension.h>
 #include <cuda_runtime_api.h> // cudaMalloc, cudaMemcpy, etc.
 #include <cusparse.h>
 #include <torch/script.h>
@@ -8,12 +12,11 @@
 #include <bits/stdc++.h>
 #include <omp.h>
 #include <stdlib.h>
-#include <torch/torch.h>
-#include "../src/formats/csrc_matrix.h"
-#include "../src/formats/dense_matrix.h"
-#include "../src/ops/aggregators.h"
-#include "../src/ops/tiling.h"
-#include "../src/utils/mtx_io.h"
+#include <formats/csrc_matrix.h>
+#include <formats/dense_matrix.h>
+#include <ops/aggregators.h>
+#include <ops/tiling.h>
+#include <utils/mtx_io.h>
 #include "../include/common.h"
 
 #include <algorithm>
@@ -30,6 +33,8 @@ typedef DenseMatrix<ind1_t, ind2_t, mask_load_t> DBL;
 typedef DenseMatrix<ind1_t, ind2_t, mask_t> DB;
 typedef CSRCMatrix<ind1_t, ind2_t, val_t> SM;
 int global_nrows;
+int global_classes;
+int global_emb_size;
 int global_ra;
 int global_rb;
 std::vector<int> global_segments;
@@ -487,6 +492,7 @@ public:
     return {aggregate_node_mul_sum_coarse2_call(input_dense, offset_graph, columns_graph, value_graph, bounds, segments), torch::Tensor()};
   }
 };
+
 struct GALAGNN : torch::nn::Module
 {
   torch::nn::Linear fc0{nullptr};
@@ -496,6 +502,7 @@ struct GALAGNN : torch::nn::Module
     fc0 = register_module("fc0", torch::nn::Linear(size0, size1));
     fc1 = register_module("fc1", torch::nn::Linear(size1, size2));
   }
+
   std::vector<torch::Tensor>
   forward(torch::Tensor t_iden, int ep, int mod_v)
   {
@@ -542,10 +549,10 @@ struct GALAGNN : torch::nn::Module
     res = norm * res;
     return {res};
   }
-};
 
-
-int main(int argc, char **argv)
+static std::shared_ptr<GALAGNN>
+prepare_adjacency_matrix(int nrows, int ncols, int nvals,
+                         torch::Tensor vals, torch::Tensor col, torch::Tensor offsets)
 {
   typedef typename SM::itype iT;
   typedef typename SM::ntype nT;
@@ -560,15 +567,19 @@ int main(int argc, char **argv)
       torch::TensorOptions().dtype(torch::kFloat).requires_grad(true);
 
   SM adj0;
-  std::string filename = "../../Data/Cora/";
-  readSM_npy32<SM>(filename, &adj0);
-
+  adj0.clone_mtx(
+    nrows,
+    ncols,
+    nvals,
+    col.data_ptr<int>(),
+    vals.data_ptr<float>(),
+    offsets.data_ptr<int>(),
+    CSRC_TYPE::CSR
+  );
   // Adj info
-  iT nrows = adj0.nrows();
   global_nrows = nrows;
-  iT ncols = adj0.ncols();
-  nT nvals0 = adj0.nvals();
 
+#if 0
   // Init input with random numbers
   DM input_emb;
   readDM_npy<DM>(filename + "Feat.npy", &input_emb,
@@ -597,6 +608,11 @@ int main(int argc, char **argv)
   repopulate<DBL, DB>(&test_mask_load, &test_mask);
   int classes =
       *std::max_element(labels.vals_ptr(), labels.vals_ptr() + labels.nvals()) + 1;
+  global_classes = classes;
+  global_emb_size = emb_size;
+#endif
+  std::vector<SM *> tiled_graph_tile;
+  tiled_graph_tile.push_back(&adj0);
   torch::Tensor total_offsets_graph_tile;
   torch::Tensor total_cols_graph_tile;
   torch::Tensor total_vals_graph_tile;
@@ -617,7 +633,8 @@ int main(int argc, char **argv)
   global_bounds.push_back(total_bounds_graph_tile);
   global_segments.push_back(segments_graph_tile);
   global_bounds.push_back(total_bounds_graph_tile);
-
+  return std::make_shared<GALAGNN>(1433, 32, 7);
+#if 0
   torch::Device device(torch::kCUDA);
   auto options_cu_int = torch::TensorOptions()
                             .dtype(torch::kInt)
@@ -745,4 +762,16 @@ int main(int argc, char **argv)
   CUDA_CHECK(cudaFree(dB));
   std::cout << calc_mean(times_arr) << ","
             << calc_mean(times_arr) + calc_mean(times_arr_train) << std::endl;
+  #endif
+}
+    };
+
+PYBIND11_MODULE(gala_model, m) {
+  torch::python::bind_module<GALAGNN>(m, "GALAGNN")
+    .def(py::init<int, int, int>())
+    .def("forward", &GALAGNN::forward);
+
+  m.def("prepare", &GALAGNN::prepare_adjacency_matrix, "-");
+
+//  m.def("prepare_adjacency_matrix", &prepare_adjacency_matrix, "-");
 }

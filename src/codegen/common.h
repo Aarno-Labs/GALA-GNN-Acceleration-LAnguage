@@ -1725,7 +1725,8 @@ std::vector<torch::Tensor> global_bounds;\n";
     void writeCode(std::vector<CIRNode*> &program,
         std::vector<RelationEdge*>& dependencies,
         std::vector<RelationEdge*>& associations,
-        std::vector<TransformEdge*>& transforms)
+        std::vector<TransformEdge*>& transforms,
+        bool write_main)
     {
         // Kernel code - Architecture dependant
         // CMake (also has write for now?)
@@ -1751,14 +1752,16 @@ std::vector<torch::Tensor> global_bounds;\n";
         this->writeCode(*model.getForwardCallInternal(), outStreamModel, "");
         this->writeCode(*model.getForwardCallPost(), outStreamModel);
         this->writeCode(*model.getForward(), outStreamModel);
-        this->writeCode(preCode, outStreamModel);
-        // std::cout << "Works4" << std::endl;
-        this->writeCode(*model.getInv(), outStreamModel);
-        this->writeCode(*model.getPreCall(), outStreamModel, "");
-        this->writeCode(*model.getCall(), outStreamModel, "");
-        this->writeCode(*model.getPostCall(), outStreamModel);
-        // std::cout << "Works5" << std::endl;
-        this->writeCode(postCode, outStreamModel);
+        if (write_main) {
+            this->writeCode(preCode, outStreamModel);
+            // std::cout << "Works4" << std::endl;
+            this->writeCode(*model.getInv(), outStreamModel);
+            this->writeCode(*model.getPreCall(), outStreamModel, "");
+            this->writeCode(*model.getCall(), outStreamModel, "");
+            this->writeCode(*model.getPostCall(), outStreamModel);
+            // std::cout << "Works5" << std::endl;
+            this->writeCode(postCode, outStreamModel);
+        }
 
         this->closeStream();
     }
