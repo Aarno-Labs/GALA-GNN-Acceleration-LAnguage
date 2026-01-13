@@ -63,6 +63,10 @@ class Code
 private:
     std::vector<std::string> codeLines;
 
+    void addStatement(std::string stmt) {
+        codeLines.push_back(stmt + ";");
+    }
+
 public:
     Code()
     {
@@ -73,6 +77,96 @@ public:
         return this->codeLines.size();
     }
 
+    void addTypedef(std::string ty, std::string newTy)
+    {
+        addStatement("typedef " + ty + " " + newTy);
+    }
+
+    std::string declare(std::string ty, std::string var)
+    {
+        addStatement(ty + " " + var);
+        return var;
+    }
+
+    std::string declare_cstr_init(std::string ty, std::string var, std::string init)
+    {
+        addStatement(ty + " " + var + "(" + init + ")");
+        return var;
+    }
+
+    std::vector<std::string> declare(std::string ty, std::vector<std::string> vars)
+    {
+        std::vector<std::string> decls;
+        for (auto v : vars)
+        {
+            decls.push_back(declare(ty, v));
+        }
+        return decls;
+    }
+
+    std::string declare(std::string ty, std::string var, std::string initializer)
+    {
+        addStatement(ty + " " + var + " = " + initializer);
+        return var;
+    }
+
+    void assign(std::string v, std::string e)
+    {
+        addStatement(v + " = " + e);
+    }
+
+    void expr(std::string e)
+    {
+        addStatement(e);
+    }
+
+    void comment(std::string c)
+    {
+        codeLines.push_back(c);
+    }
+
+    static std::string binOp(std::string op, std::string lhs, std::string rhs)
+    {
+        return "(" + lhs + ") " + op + "(" + rhs + ")";
+    }
+
+    static std::string vec(std::string body)
+    {
+        return "{" + body + "}";
+    }
+
+    static std::string vec(std::vector<std::string> body)
+    {
+        return "{" + intersperse(", ", body) + "}";
+    }
+
+
+    static std::string intersperse(std::string s, std::vector<std::string> strs)
+    {
+        std::string interstr = "";
+
+        auto it = strs.begin();
+        if (it != strs.end()) {
+            interstr += *it;
+            for (it = ++it; it != strs.end(); ++it) {
+                interstr += s;
+                interstr += *it;
+            }
+        }
+
+        return interstr;
+    }
+
+    static std::string callFn(std::string name, std::vector<std::string> args)
+    {
+        return name + "(" + intersperse(", ", args) + ")";
+    }
+
+        static std::string callMethod(std::string recv, std::string name, std::vector<std::string> args = {})
+    {
+        return callFn(recv + "." + name, args);
+    }
+
     void addCode(std::string& newCode)
     {
         this->codeLines.push_back(newCode);
@@ -81,6 +175,36 @@ public:
     std::string* atLine(int ix)
     {
         return &(this->codeLines.at(ix));
+    }
+};
+
+class FunctionBuilder
+{
+    // name, type
+    typedef std::pair<std::string, std::string> Arg;
+private:
+    std::string name;
+    std::vector<Arg> args;
+    std::string retType;
+    Code body;
+
+public:
+    FunctionBuilder(std::string the_name, std::vector<Arg> the_args, std::string the_retType)
+        : name(the_name),
+          args(the_args),
+          retType(the_retType)
+        {}
+
+    FunctionBuilder(std::string the_name) : name(the_name) {}
+
+    void addArgument(std::string name, std::string type)
+    {
+        args.push_back(std::pair(name, type));
+    }
+
+    Code* getCode()
+    {
+        return &body;
     }
 };
 
@@ -271,6 +395,11 @@ protected:
     Model model; // TODO: Assume a single model for now
     Code postCode; // Cleanup code?
 
+
+    FunctionBuilder mainBuilder{
+      FunctionBuilder("main", { std::pair("argc", "int"), std::pair("argv", "char**") }, "int")
+    };
+
     std::vector<std::string> generatedFunctions;
 
     std::ofstream outStreamModel;
@@ -399,7 +528,70 @@ public:
 
     }
 
-    std::string generateTransformation(DataNode* srcNode, std::vector<TransformEdge*>& transforms)
+    //returns name of segments/total_bounds
+    std::pair<std::string, std::string>
+    generateTiling(Code *builder, DataNode *srcNode, DataNode *dNode, std::string tiling_param, std::string suffix)
+    {
+        auto dNodeName = dNode->getName() + suffix;
+        auto sNodeName = srcNode->getName() + suffix;
+        auto tiled_dnode_vec = builder->declare("std::vector<SM*>", "tiled_" +  dNodeName);
+        builder->expr(Code::callMethod(tiled_dnode_vec, "push_back", { "&" + sNodeName }));
+        auto total_decls = builder->declare("torch::Tensor", {
+            "total_offsets_" + dNodeName,
+            "total_cols_" + dNodeName,
+            "total_vals_" + dNodeName,
+            "total_bounds_" + dNodeName,
+        });
+        auto tile_offsets = builder->declare(
+            "std::vector<iT>",
+            "tile_offsets_" + dNodeName,
+            Code::callFn("static_ord_col_breakpoints<SM>",
+                         {"&" + sNodeName, tiling_param})
+        );
+        auto segments = builder->declare("iT", "segments_" + dNodeName,
+                         Code::binOp("-", Code::callMethod(tile_offsets, "size"), "1"));
+        auto zerosSize = Code::binOp("*",
+                                     Code::binOp("+", "1", Code::callMethod(sNodeName, "nrows")),
+                                     segments);
+        builder->assign(total_decls[0],
+                        Code::callFn("torch::zeros", {zerosSize, "options_int_tile"}));
+        builder->assign(
+            total_decls[1],
+            Code::callFn("torch::zeros", {Code::callMethod(sNodeName, "nvals"),
+                                          "options_int_tile"}));
+        builder->assign(
+            total_decls[2],
+            Code::callFn("torch::zeros", {Code::callMethod(sNodeName, "nvals"),
+                                          "options_float_tile"}));
+        builder->assign(
+            total_decls[3],
+            Code::callFn("torch::zeros", {Code::binOp("*", "2", segments),
+                                          "options_int_tile"}));
+
+        builder->expr(
+            Code::callFn("ord_col_tiling_torch",
+                         {tile_offsets, total_decls[0], total_decls[1],
+                          total_decls[2], total_decls[3], "&" + sNodeName}));
+
+        builder->declare("iT*", "offset_ptr_" + dNodeName,
+                         Code::callMethod(total_decls[0], "data_ptr<iT>"));
+        builder->declare("iT*", "col_ptr_" + dNodeName,
+                         Code::callMethod(total_decls[1], "data_ptr<iT>"));
+        builder->declare("vT*", "val_ptr_" + dNodeName,
+                         Code::callMethod(total_decls[2], "data_ptr<vT>"));
+
+        builder->expr(
+            Code::callMethod("global_segments", "push_back", {segments}));
+        builder->expr(
+            Code::callMethod("global_bounds", "push_back", {total_decls[3]}));
+        return std::pair(segments, total_decls[3]);
+        // std::cout << transform->getNode1()->getName() << " " <<
+        // transform->getNode2()->getName() << std::endl; std::cout <<
+        // transform->getNode1()->getDataInfo()->getDirected() << " " <<
+        // transform->getNode2()->getDataInfo()->getDirected() << std::endl;
+    }
+
+    std::string generateTransformation(Code* builder, DataNode* srcNode, std::vector<TransformEdge*>& transforms)
     {
         std::string resString = "";
         for (int ix = 0; ix < transforms.size(); ix++)
@@ -414,35 +606,11 @@ public:
                     auto tr = transform->getTransformation(tix);
                     if (tr->getTransformation() == COL_TILE_DOPT)
                     {
-                        resString +=  "  std::vector<SM *> tiled_" + dNode->getName() +";\n\
-      tiled_" + dNode->getName() + ".push_back(&" + srcNode->getName() + ");\n\
-      torch::Tensor total_offsets_" + dNode->getName() + ";\n\
-      torch::Tensor total_cols_" + dNode->getName() + ";\n\
-      torch::Tensor total_vals_" + dNode->getName() + ";\n\
-      torch::Tensor total_bounds_" + dNode->getName() + ";\n\
-      std::vector<iT> tile_offsets_" + dNode->getName() + " =\n\
-        static_ord_col_breakpoints<SM>(&" + srcNode->getName() + ", " + tr->getParam(0) +");\n\
-      iT segments_" + dNode->getName() + " = tile_offsets_" + dNode->getName() + ".size() - 1;\n\
-      total_offsets_" + dNode->getName() + " = torch::zeros({(" + srcNode->getName() + ".nrows() + 1) * (segments_"
-                        + dNode->getName() + ")}, options_int_tile);\n\
-      total_cols_" + dNode->getName() + " = torch::zeros({" + srcNode->getName() + ".nvals()}, options_int_tile);\n\
-      total_vals_" + dNode->getName() + " = torch::zeros({" + srcNode->getName() + ".nvals()}, options_float_tile);\n\
-      total_bounds_" + dNode->getName() + " = torch::zeros({2 * (segments_" + dNode->getName() + ")}, options_int_tile);\n\
-      ord_col_tiling_torch(tile_offsets_" + dNode->getName() + ", total_offsets_" + dNode->getName() +
-                            ", total_cols_" + dNode->getName() + ", total_vals_" + dNode->getName() + ",\n\
-        total_bounds_" + dNode->getName() + ", &" + srcNode->getName() + ");\n\
-      iT *offset_ptr_" + dNode->getName() + " = total_offsets_" + dNode->getName() + ".data_ptr<iT>();\n\
-      iT *col_ptr_" + dNode->getName() + " = total_cols_" + dNode->getName() + ".data_ptr<iT>();\n\
-      vT *val_ptr_" + dNode->getName() + " = total_vals_" + dNode->getName() + ".data_ptr<vT>();\n";
-
-                        resString += "  global_segments.push_back(segments_" + dNode->getName() + ");\n";
-                        resString += "  global_bounds.push_back(total_bounds_" + dNode->getName() + ");\n";
-                        // std::cout << transform->getNode1()->getName() << " " << transform->getNode2()->getName() << std::endl;
-                        // std::cout << transform->getNode1()->getDataInfo()->getDirected() << " " << transform->getNode2()->getDataInfo()->getDirected() << std::endl;
+                        auto segmentsAndBounds = generateTiling(builder, srcNode, dNode, tr->getParam(0), "");
                         if (!dNode->getDataInfo()->getDirected())
                         {
-                            resString += "  global_segments.push_back(segments_" + dNode->getName() + ");\n";
-                            resString += "  global_bounds.push_back(total_bounds_" + dNode->getName() + ");\n";
+                            builder->expr(Code::callMethod("global_segments", "push_back", { segmentsAndBounds.first }));
+                            builder->expr(Code::callMethod("global_bounds", "push_back", { segmentsAndBounds.second }));
                         } else
                         {
                             std::string tilingParam;
@@ -453,52 +621,36 @@ public:
                             {
                                 tilingParam = tr->getParam(0);
                             }
-                            resString +=  "  std::vector<SM *> tiled_" + dNode->getName() +"_b;\n\
-      tiled_" + dNode->getName() + "_b.push_back(&" + srcNode->getName() + "_b);\n\
-      torch::Tensor total_offsets_" + dNode->getName() + "_b;\n\
-      torch::Tensor total_cols_" + dNode->getName() + "_b;\n\
-      torch::Tensor total_vals_" + dNode->getName() + "_b;\n\
-      torch::Tensor total_bounds_" + dNode->getName() + "_b;\n\
-      std::vector<iT> tile_offsets_" + dNode->getName() + "_b =\n\
-        static_ord_col_breakpoints<SM>(&" + srcNode->getName() + "_b, " + tilingParam +");\n\
-      iT segments_" + dNode->getName() + "_b = tile_offsets_" + dNode->getName() + "_b.size() - 1;\n\
-      total_offsets_" + dNode->getName() + "_b = torch::zeros({(" + srcNode->getName() + "_b.nrows() + 1) * (segments_"
-                        + dNode->getName() + "_b)}, options_int_tile);\n\
-      total_cols_" + dNode->getName() + "_b = torch::zeros({" + srcNode->getName() + "_b.nvals()}, options_int_tile);\n\
-      total_vals_" + dNode->getName() + "_b = torch::zeros({" + srcNode->getName() + "_b.nvals()}, options_float_tile);\n\
-      total_bounds_" + dNode->getName() + "_b = torch::zeros({2 * (segments_" + dNode->getName() + "_b)}, options_int_tile);\n\
-      ord_col_tiling_torch(tile_offsets_" + dNode->getName() + "_b, total_offsets_" + dNode->getName() +
-                            "_b, total_cols_" + dNode->getName() + "_b, total_vals_" + dNode->getName() + "_b,\n\
-        total_bounds_" + dNode->getName() + "_b, &" + srcNode->getName() + "_b);\n\
-      iT *offset_ptr_" + dNode->getName() + "_b = total_offsets_" + dNode->getName() + "_b.data_ptr<iT>();\n\
-      iT *col_ptr_" + dNode->getName() + "_b = total_cols_" + dNode->getName() + "_b.data_ptr<iT>();\n\
-      vT *val_ptr_" + dNode->getName() + "_b = total_vals_" + dNode->getName() + "_b.data_ptr<vT>();\n";
-
-                            resString += "  global_segments.push_back(segments_" + dNode->getName() + "_b);\n";
-                            resString += "  global_bounds.push_back(total_bounds_" + dNode->getName() + "_b);\n";
+                            generateTiling(builder, srcNode, dNode, tilingParam, "_b");
                         }
                     } else if (tr->getTransformation() == SUBGRAPH_DOPT)
                     {
                         if (tr->getNumParam() == 2)
                         {
-                            resString +=  " std::vector<SM *> forward_adj;\n\
-      std::vector<SM *> backward_adj;\n\
-      getMaskSubgraphs(&adj0, &train_mask, " + tr->getParam(1) + ", forward_adj, backward_adj);\n";
+                            auto forward_adj = builder->declare("std::vector<SM *>", "forward_adj");
+                            auto backward_adj = builder->declare("std::vector<SM *>", "backward_adj");
+                            builder->expr(Code::callFn("getMaskSubgraphs", { "&adj0", "&train_mask", tr->getParam(1), forward_adj, backward_adj}));
                             for (int i = 0; i < std::stoi(tr->getParam(1)); i++)
                             {
                                 int iy = std::stoi(tr->getParam(1)) - (i + 1);
                                 int iz = i + 1;
-                                resString += "  SM adj" + std::to_string(iz) + " = *forward_adj[" + std::to_string(iy) +"];\n\
-      SM adj" + std::to_string(iz) + "_b = *backward_adj[" + std::to_string(iy) +"];\n\
-      nT nvals" + std::to_string(iz) + " = adj" + std::to_string(iz) + ".nvals();\n";
+                                auto adj = builder->declare("SM",
+                                                            "adj" + std::to_string(iz),
+                                                            "*" + forward_adj + "[" + std::to_string(iy) + "]");
+                                auto adj_b = builder->declare("SM",
+                                                              "adj" + std::to_string(iz) + "_b",
+                                                              "*" + backward_adj + "[" + std::to_string(iy) + "]");
+                                auto nvals = builder->declare("nT", "nvals" + std::to_string(iz), Code::callMethod(adj, "nvals"));
                             }
                         }
-                        resString += generateTransformation(dNode, transforms);
+                        generateTransformation(builder, dNode, transforms);
                     } else if (tr->getTransformation() == SAMPLE_DOPT)
                     {
-                        resString += "inplace_sample_graph_ab(&" + srcNode->getName() + ", " +  tr->getParam(0) + ", 5, 7);\n\
-nvals0 = adj0.nvals();\n";
-                        resString += generateTransformation(dNode, transforms);
+                        builder->expr(
+                            Code::callFn("inplace_sample_graph_ab", { "&" + srcNode->getName(), tr->getParam(0), "5", "7" })
+                        );
+                        builder->assign("nvals0", Code::callMethod("adj0", "nvals"));
+                        generateTransformation(builder, dNode, transforms);
                     }
 
                 }
@@ -527,98 +679,60 @@ nvals0 = adj0.nvals();\n";
             }
 
             // This doesn't need to change
-            std::string fileLoadCode;
-            if (GALAFEContext::use_long)
-            {
-                fileLoadCode = "    SM adj0;\n\
-    std::string filename = \"../../Data/" + cNode->getParam(0) +  "/\";\n\
-    readSM_npy32<SM>(filename, &adj0);\n\
-\n\
-    // Adj info\n\
-    int64_t nrows = (int64_t)adj0.nrows();\n\
-    global_nrows = (iT)nrows;\n\
-    int64_t ncols = (int64_t)adj0.ncols();\n\
-    int64_t nvals0 = (int64_t)adj0.nvals();\n\
-\n\
-    // Init input with random numbers\n\
-    DM input_emb;\n\
-    readDM_npy<DM>(filename + \"Feat.npy\", &input_emb,\n\
-                   DM::DENSE_MTX_TYPE::RM);\n\
-    int64_t emb_size = (int64_t)input_emb.ncols();\n\
-\n\
-    DL labels;\n\
-    readDM_npy<DL>(filename + \"Lab.npy\", &labels,\n\
-                   DL::DENSE_MTX_TYPE::RM);\n\
-\n\
-    DBL train_mask_load;\n\
-    readDM_npy<DBL>(filename + \"TnMsk.npy\", &train_mask_load,\n\
-                    DBL::DENSE_MTX_TYPE::RM);\n\
-    DBL valid_mask_load;\n\
-    readDM_npy<DBL>(filename + \"VlMsk.npy\", &valid_mask_load,\n\
-                    DBL::DENSE_MTX_TYPE::RM);\n\
-    DBL test_mask_load;\n\
-    readDM_npy<DBL>(filename + \"TsMsk.npy\", &test_mask_load,\n\
-                    DBL::DENSE_MTX_TYPE::RM);\n\
-\n\
-    DB train_mask;\n\
-    repopulate<DBL, DB>(&train_mask_load, &train_mask);\n\
-    DB valid_mask;\n\
-    repopulate<DBL, DB>(&valid_mask_load, &valid_mask);\n\
-    DB test_mask;\n\
-    repopulate<DBL, DB>(&test_mask_load, &test_mask);\n\
-    int classes =\n\
-    *std::max_element(labels.vals_ptr(), labels.vals_ptr() + labels.nvals()) + 1;\n\
-    global_classes = classes;\n\
-    global_emb_size = emb_size;";
-            } else
-            {
-                fileLoadCode = "    SM adj0;\n\
-    std::string filename = \"../../Data/" + cNode->getParam(0) +  "/\";\n\
-    readSM_npy32<SM>(filename, &adj0);\n\
-\n\
-    // Adj info\n\
-    iT nrows = adj0.nrows();\n\
-    global_nrows = nrows;\n\
-    iT ncols = adj0.ncols();\n\
-    nT nvals0 = adj0.nvals();\n\
-\n\
-    // Init input with random numbers\n\
-    DM input_emb;\n\
-    readDM_npy<DM>(filename + \"Feat.npy\", &input_emb,\n\
-                   DenseMatrix<ind1_t, ind2_t, val_t>::DENSE_MTX_TYPE::RM);\n\
-    iT emb_size = input_emb.ncols();\n\
-\n\
-    DL labels;\n\
-    readDM_npy<DL>(filename + \"Lab.npy\", &labels,\n\
-                   DenseMatrix<ind1_t, ind2_t, lab_t>::DENSE_MTX_TYPE::RM);\n\
-\n\
-    DBL train_mask_load;\n\
-    readDM_npy<DBL>(filename + \"TnMsk.npy\", &train_mask_load,\n\
-                    DBL::DENSE_MTX_TYPE::RM);\n\
-    DBL valid_mask_load;\n\
-    readDM_npy<DBL>(filename + \"VlMsk.npy\", &valid_mask_load,\n\
-                    DBL::DENSE_MTX_TYPE::RM);\n\
-    DBL test_mask_load;\n\
-    readDM_npy<DBL>(filename + \"TsMsk.npy\", &test_mask_load,\n\
-                    DBL::DENSE_MTX_TYPE::RM);\n\
-\n\
-    DB train_mask;\n\
-    repopulate<DBL, DB>(&train_mask_load, &train_mask);\n\
-    DB valid_mask;\n\
-    repopulate<DBL, DB>(&valid_mask_load, &valid_mask);\n\
-    DB test_mask;\n\
-    repopulate<DBL, DB>(&test_mask_load, &test_mask);\n\
-    int classes =\n\
-    *std::max_element(labels.vals_ptr(), labels.vals_ptr() + labels.nvals()) + 1;\n\
-    global_classes = classes;\n\
-    global_emb_size = emb_size;";
-            }
-            preCode.addCode(fileLoadCode);
+            Code *mainBuilderCode = mainBuilder.getCode();
+            std::string emb_type = GALAFEContext::use_long ? "DM" : "DenseMatrix<ind1_t, ind2_t, val_t>";
+            std::string lab_type = GALAFEContext::use_long ? "DL" : "DenseMatrix<ind1_t, ind2_t, val_t>";
+            mainBuilderCode->declare("SM", "adj0");
+            mainBuilderCode->declare("std::string", "filename", "\"../../Data/" + cNode->getParam(0) +  "/\"");
+            mainBuilderCode->expr(
+                Code::callFn("readSM_npy32<SM>", { "filename", "&adj0" })
+            );
+
+            mainBuilderCode->comment("Adj info");
+            mainBuilderCode->declare("int64_t", "nrows", "(int64_t)adj0.nrows()");
+            mainBuilderCode->assign("global_nrows", "(iT)nrows");
+
+            mainBuilderCode->comment("Init input with random numbers");
+            mainBuilderCode->declare("DM", "input_emb");
+            mainBuilderCode->expr(
+                Code::callFn("readDM_npy<DM>", { "filename + \"Feat.npy\"",
+                                                 "&input_emb",
+                                                 emb_type + "::DENSE_MTX_TYPE::RM" })
+            );
+            mainBuilderCode->declare("int64_t", "emb_size", "(int64_t)input_emb.ncols()");
+
+            mainBuilderCode->declare("DL", "labels");
+            mainBuilderCode->expr(Code::callFn("readDM_npy<DL>", {"filename + \"Lab.npy\"", "&labels", lab_type + "::DENSE_MTX_TYPE::RM"}));
+
+            mainBuilderCode->declare("DBL", "train_mask_load");
+            mainBuilderCode->expr(Code::callFn("readDM_npy<DL>", {"filename + \"TnMsk.npy\"", "&train_mask_load", "DL::DENSE_MTX_TYPE::RM"}));
+
+            mainBuilderCode->declare("DBL", "valid_mask_load");
+            mainBuilderCode->expr(Code::callFn("readDM_npy<DL>", {"filename + \"TnMsk.npy\"", "&valid_mask_load", "DL::DENSE_MTX_TYPE::RM"}));
+
+            mainBuilderCode->declare("DBL", "test_mask_load");
+            mainBuilderCode->expr(Code::callFn("readDM_npy<DL>", {"filename + \"TnMsk.npy\"", "&test_mask_load", "DL::DENSE_MTX_TYPE::RM"}));
+
+            mainBuilderCode->declare("DB", "train_mask");
+            mainBuilderCode->expr(Code::callFn("repopulate<DBL, DB>", { "&train_mask_load", "&train_mask"}));
+
+            mainBuilderCode->declare("DB", "valid_mask");
+            mainBuilderCode->expr(Code::callFn("repopulate<DBL, DB>", { "&valid_mask_load", "&valid_mask"}));
+
+            mainBuilderCode->declare("DB", "test_mask");
+            mainBuilderCode->expr(Code::callFn("repopulate<DBL, DB>", { "&test_mask_load", "&test_mask"}));
+
+            auto call_max = Code::callFn(
+                "std::max_element",
+                { "labels.vals_ptr(), labels.vals_ptr() + labels.nvals()" }
+            );
+            mainBuilderCode->declare("int", "classes", "1 + *" + call_max);
+            mainBuilderCode->assign("global_classes", "classes");
+            mainBuilderCode->assign("global_emb_size", "emb_size");
 
             // Graph output
             auto outputGraph = cNode->getOutput(1);
-            std::string transformationCode = generateTransformation(outputGraph, transforms);
-            preCode.addCode(transformationCode);
+            generateTransformation(mainBuilderCode, outputGraph, transforms);
         } else if (cNode->getOp() == AGGREGATE_EDGE_SUM_OP)
         {
             hasFFNEdgeUpdate = true;
@@ -1423,8 +1537,7 @@ forward(torch::Tensor t_iden";
 
                 auto loopNode = dynamic_cast<TrainingLoopNode*>(outNode);
 
-                std::string numIterCode = "int num_iters = " + std::to_string(loopNode->getIter()) + ";";
-                preCode.addCode(numIterCode);
+                mainBuilder.getCode()->declare("int", "num_iters", std::to_string(loopNode->getIter()));
 
                 for (int ix = 0; ix < loopNode->getLoopNodeNum(); ix++)
                 {
@@ -1707,26 +1820,25 @@ std::vector<torch::Tensor> global_bounds;\n";
 
         importCode.addCode(tempStdCommon);
 
-        std::string mainFuncCode  = "int main(int argc, char **argv) {\n\
-  typedef typename SM::itype iT;\n\
-  typedef typename SM::ntype nT;\n\
-  typedef typename SM::vtype vT;\n\
-\n\
-  typedef typename DM::itype diT;\n\
-  typedef typename DM::ntype dnT;\n\
-  typedef typename DM::vtype dvT;\n\
-  auto options_int_tile = \n\
-    torch::TensorOptions().dtype(torch::kInt).requires_grad(false);\n\
-  auto options_float_tile = \n\
-    torch::TensorOptions().dtype(torch::kFloat).requires_grad(true);\n";
-        preCode.addCode(mainFuncCode);
+        mainBuilder.getCode()->addTypedef("typename SM::itype", "iT");
+        mainBuilder.getCode()->addTypedef("typename SM::ntype", "nT");
+        mainBuilder.getCode()->addTypedef("typename SM::vtype", "vT");
+        mainBuilder.getCode()->addTypedef("typename DM::itype", "diT");
+        mainBuilder.getCode()->addTypedef("typename DM::ntype", "dnT");
+        mainBuilder.getCode()->addTypedef("typename DM::vtype", "dvT");
+        mainBuilder.getCode()->declare("auto",
+                                       "options_int_tile",
+                                       "torch::TensorOptions().dtype(torch::kInt).requires_grad(false)");
+        mainBuilder.getCode()->declare("auto",
+                                       "options_float_tile",
+                                       "torch::TensorOptions().dtype(torch::kFlat).requires_grad(true)");
     }
 
     void writeCode(std::vector<CIRNode*> &program,
         std::vector<RelationEdge*>& dependencies,
         std::vector<RelationEdge*>& associations,
         std::vector<TransformEdge*>& transforms,
-        bool write_main)
+        bool write_main = true)
     {
         // Kernel code - Architecture dependant
         // CMake (also has write for now?)
@@ -1753,12 +1865,21 @@ std::vector<torch::Tensor> global_bounds;\n";
         this->writeCode(*model.getForwardCallPost(), outStreamModel);
         this->writeCode(*model.getForward(), outStreamModel);
         if (write_main) {
-            this->writeCode(preCode, outStreamModel);
+            outStreamModel << "int main(int argc, char **argv) {" << std::endl;
+            this->writeCode(*mainBuilder.getCode(), outStreamModel);
             // std::cout << "Works4" << std::endl;
+            outStreamModel << "// INV >>" << std::endl;
             this->writeCode(*model.getInv(), outStreamModel);
+            outStreamModel << "// INV <<" << std::endl;
+            outStreamModel << "// PreCall >>" << std::endl;
             this->writeCode(*model.getPreCall(), outStreamModel, "");
+            outStreamModel << "// PreCall <<" << std::endl;
+            outStreamModel << "// getCall >>" << std::endl;
             this->writeCode(*model.getCall(), outStreamModel, "");
+            outStreamModel << "// getCall <<" << std::endl;
+            outStreamModel << "// postCall >>" << std::endl;
             this->writeCode(*model.getPostCall(), outStreamModel);
+            outStreamModel << "// postCall <<" << std::endl;
             // std::cout << "Works5" << std::endl;
             this->writeCode(postCode, outStreamModel);
         }
