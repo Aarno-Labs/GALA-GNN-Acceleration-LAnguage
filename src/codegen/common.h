@@ -710,7 +710,12 @@ public:
                                                  "&input_emb",
                                                  emb_type + "::DENSE_MTX_TYPE::RM" })
             );
-            mainBuilderCode->declare("int64_t", "emb_size", "(int64_t)input_emb.ncols()");
+
+            if (GALAFEContext::use_long) {
+                mainBuilderCode->declare("int64_t", "emb_size", "(int64_t)input_emb.ncols()");
+            } else {
+                mainBuilderCode->declare("iT", "emb_size", "input_emb.ncols()");
+            }
 
             mainBuilderCode->declare("DL", "labels");
             mainBuilderCode->expr(Code::callFn("readDM_npy<DL>", {"filename + \"Lab.npy\"", "&labels", lab_type+"::DENSE_MTX_TYPE::RM"}));

@@ -1057,16 +1057,19 @@ int printMemoryUsage() {\n\
         if (isColTile)
         {
             t_offsets = tensorFromBlob(mainBuilder.getCode(),
+                                       "int",
                                        "t_offsets"+std::to_string(indexData)+suffix,
                                        "offset_ptr_"+dataName+suffix,
                                        { Code::binOp("*", Code::binOp("+", "nrows", "1"), "segments_"+dataName+suffix) },
                                        "options_cu_int");
             t_cols = tensorFromBlob(mainBuilder.getCode(),
+                                    "int",
                                     "t_cols"+std::to_string(indexData)+suffix,
                                     "col_ptr_"+dataName+suffix,
                                     { "nvals"+std::to_string(indexData) },
                                     "options_cu_int");
             t_vals = tensorFromBlob(mainBuilder.getCode(),
+                                    "float",
                                     "t_vals"+std::to_string(indexData)+suffix,
                                     "val_ptr_"+dataName+suffix,
                                     { "nvals"+std::to_string(indexData) },
@@ -1074,24 +1077,27 @@ int printMemoryUsage() {\n\
         } else
         {
             t_offsets = tensorFromBlob(mainBuilder.getCode(),
+                                       "int",
                                        "t_offsets"+std::to_string(indexData)+suffix,
                                        Code::callMethod("adj"+std::to_string(indexData)+suffix, "offset_ptr"),
                                        { Code::binOp("+", "nrows", "1") },
                                        "options_cu_int");
             t_cols = tensorFromBlob(mainBuilder.getCode(),
+                                       "int",
                                        "t_cols"+std::to_string(indexData),
                                        Code::callMethod("adj"+std::to_string(indexData)+suffix, "ids_ptr"),
                                        { "nvals"+std::to_string(indexData) },
                                        "options_cu_int");
             t_vals = tensorFromBlob(mainBuilder.getCode(),
+                                       "float",
                                        "t_vals"+std::to_string(indexData)+suffix,
                                        Code::callMethod("adj"+std::to_string(indexData)+suffix, "vals_ptr"),
                                        { "nvals"+std::to_string(indexData) },
                                        "options_cu_float_ngrad");
         }
-        mainBuilder.getCode()->assign(t_offsets, Code::callMethod(t_offsets, "to", { "device" }));
-        mainBuilder.getCode()->assign(t_cols, Code::callMethod(t_cols, "to", { "device" }));
-        mainBuilder.getCode()->assign(t_vals, Code::callMethod(t_vals, "to", { "device" }));
+        // mainBuilder.getCode()->assign(t_offsets, Code::callMethod(t_offsets, "to", { "device" }));
+        // mainBuilder.getCode()->assign(t_cols, Code::callMethod(t_cols, "to", { "device" }));
+        // mainBuilder.getCode()->assign(t_vals, Code::callMethod(t_vals, "to", { "device" }));
 
         mainBuilder.getCode()->expr(Code::callMethod("global_offset_graph", "push_back", { t_offsets}));
         mainBuilder.getCode()->expr(Code::callMethod("global_columns_graph", "push_back", { t_cols }));
@@ -1229,24 +1235,24 @@ int printMemoryUsage() {\n\
         // TODO make the transfer based on the data and the transformations applied
         // Add the graph parts to a vector
         mainBuilder.getCode()->declare_cstr_init("torch::Device", "device", "torch::kCUDA");
-        mainBuilder.getCode()->declare("auto", "options_cu_int", "torch::TensorOptions().dtype(torch::kInt).requires_grad(false)");
-        mainBuilder.getCode()->declare("auto", "options_cu_float_grad", "torch::TensorOptions().dtype(torch::kFloat).requires_grad(true)");
-        mainBuilder.getCode()->declare("auto", "options_cu_float_ngrad", "torch::TensorOptions().dtype(torch::kFloat).requires_grad(false)");
-        mainBuilder.getCode()->declare("auto", "options_cu_bool", "torch::TensorOptions().dtype(torch::kBool).requires_grad(false)");
-        mainBuilder.getCode()->declare("auto", "options_cu_long", "torch::TensorOptions().dtype(torch::kLong)");
+        mainBuilder.getCode()->declare("auto", "options_cu_int", "torch::TensorOptions().dtype(torch::kInt).requires_grad(false).device(torch::kCUDA, 0)");
+        mainBuilder.getCode()->declare("auto", "options_cu_float_grad", "torch::TensorOptions().dtype(torch::kFloat).requires_grad(true).device(torch::kCUDA, 0)");
+        mainBuilder.getCode()->declare("auto", "options_cu_float_ngrad", "torch::TensorOptions().dtype(torch::kFloat).requires_grad(false).device(torch::kCUDA, 0)");
+        mainBuilder.getCode()->declare("auto", "options_cu_bool", "torch::TensorOptions().dtype(torch::kBool).requires_grad(false).device(torch::kCUDA, 0)");
+        mainBuilder.getCode()->declare("auto", "options_cu_long", "torch::TensorOptions().dtype(torch::kLong).device(torch::kCUDA, 0)");
 
         // For now there's no slicing for a dense input so just use a hard-coded code-generation.
-        auto t_iden       = tensorFromBlob(mainBuilder.getCode(), "t_iden", Code::callMethod("input_emb", "vals_ptr"), { "nrows", "emb_size" }, "options_cu_float_grad");
-        auto t_labs       = tensorFromBlob(mainBuilder.getCode(), "t_labs", Code::callMethod("labels", "vals_ptr"), { "nrows" }, "options_cu_long");
-        auto t_train_mask = tensorFromBlob(mainBuilder.getCode(), "t_train_mask", Code::callMethod("train_mask", "vals_ptr"), { "nrows" }, "options_cu_bool");
-        auto t_valid_mask = tensorFromBlob(mainBuilder.getCode(), "t_valid_mask", Code::callMethod("valid_mask", "vals_ptr"), { "nrows" }, "options_cu_bool");
-        auto t_test_mask  = tensorFromBlob(mainBuilder.getCode(), "t_test_mask", Code::callMethod("test_mask", "vals_ptr"), { "nrows" }, "options_cu_bool");
+        auto t_iden       = tensorFromBlob(mainBuilder.getCode(), "float", "t_iden", Code::callMethod("input_emb", "vals_ptr"), { "nrows", "emb_size" }, "options_cu_float_grad");
+        auto t_labs       = tensorFromBlob(mainBuilder.getCode(), "long", "t_labs", Code::callMethod("labels", "vals_ptr"), { "nrows" }, "options_cu_long");
+        auto t_train_mask = tensorFromBlob(mainBuilder.getCode(), "bool", "t_train_mask", Code::callMethod("train_mask", "vals_ptr"), { "nrows" }, "options_cu_bool");
+        auto t_valid_mask = tensorFromBlob(mainBuilder.getCode(), "bool", "t_valid_mask", Code::callMethod("valid_mask", "vals_ptr"), { "nrows" }, "options_cu_bool");
+        auto t_test_mask  = tensorFromBlob(mainBuilder.getCode(), "bool", "t_test_mask", Code::callMethod("test_mask", "vals_ptr"), { "nrows" }, "options_cu_bool");
 
-        mainBuilder.getCode()->assign(t_iden, Code::callMethod(t_iden, "to", { "device" }));
-        mainBuilder.getCode()->assign(t_labs, Code::callMethod(t_labs, "to", { "device" }));
-        mainBuilder.getCode()->assign(t_train_mask, Code::callMethod(t_train_mask, "to", { "device" }));
-        mainBuilder.getCode()->assign(t_valid_mask, Code::callMethod(t_valid_mask, "to", { "device" }));
-        mainBuilder.getCode()->assign(t_test_mask, Code::callMethod(t_test_mask, "to", { "device" }));
+        // mainBuilder.getCode()->assign(t_iden, Code::callMethod(t_iden, "to", { "device" }));
+        // mainBuilder.getCode()->assign(t_labs, Code::callMethod(t_labs, "to", { "device" }));
+        // mainBuilder.getCode()->assign(t_train_mask, Code::callMethod(t_train_mask, "to", { "device" }));
+        // mainBuilder.getCode()->assign(t_valid_mask, Code::callMethod(t_valid_mask, "to", { "device" }));
+        // mainBuilder.getCode()->assign(t_test_mask, Code::callMethod(t_test_mask, "to", { "device" }));
 
         cudaTransfer(program);
 
@@ -1255,15 +1261,23 @@ int printMemoryUsage() {\n\
     }
 private:
     static std::string tensorFromBlob(Code *builder,
+                                        std::string type,
                                         std::string var,
                                         std::string blob,
                                         std::vector<std::string> dim,
                                         std::string options)
     {
-
-        auto from_blob = Code::callFn("torch::from_blob", { blob, Code::vec(dim), options });
-
+        // TODO: It should be possible to simply construct a tensor and send it to device
+        // with Tensor::to(), but in quick tests this seemed to result in worse
+        // inference performance
+        builder->comment("Allocate " + var + " on device");
+        auto devPtr = builder->declare(type + "*", "dev_" + var);
+        auto size = Code::intersperse(" * ", dim) + " * sizeof(" + type + ")";
+        builder->expr(Code::callFn("CUDA_CHECK", { Code::callFn("cudaMalloc", {"(void**)&"+devPtr, size }) }));
+        builder->expr(Code::callFn("CUDA_CHECK", { Code::callFn("cudaMemcpy", {devPtr, blob, size, "cudaMemcpyHostToDevice"}) }));
+        auto from_blob = Code::callFn("torch::from_blob", { devPtr, Code::vec(dim), options });
         auto tensor = builder->declare("torch::Tensor", var, from_blob);
+        builder->comment("");
 
         return tensor;
     }
