@@ -122,12 +122,12 @@ public:
 
     void comment(std::string c)
     {
-        codeLines.push_back(c);
+        codeLines.push_back("// " + c);
     }
 
     static std::string binOp(std::string op, std::string lhs, std::string rhs)
     {
-        return "(" + lhs + ") " + op + "(" + rhs + ")";
+        return "(" + lhs + ") " + op + " (" + rhs + ")";
     }
 
     static std::string vec(std::string body)
@@ -681,7 +681,7 @@ public:
             // This doesn't need to change
             Code *mainBuilderCode = mainBuilder.getCode();
             std::string emb_type = GALAFEContext::use_long ? "DM" : "DenseMatrix<ind1_t, ind2_t, val_t>";
-            std::string lab_type = GALAFEContext::use_long ? "DL" : "DenseMatrix<ind1_t, ind2_t, val_t>";
+            std::string lab_type = GALAFEContext::use_long ? "DL" : "DenseMatrix<ind1_t, ind2_t, lab_t>";
             mainBuilderCode->declare("SM", "adj0");
             mainBuilderCode->declare("std::string", "filename", "\"../../Data/" + cNode->getParam(0) +  "/\"");
             mainBuilderCode->expr(
@@ -689,8 +689,19 @@ public:
             );
 
             mainBuilderCode->comment("Adj info");
-            mainBuilderCode->declare("int64_t", "nrows", "(int64_t)adj0.nrows()");
-            mainBuilderCode->assign("global_nrows", "(iT)nrows");
+            if (GALAFEContext::use_long) {
+                mainBuilderCode->declare("int64_t", "nrows", "(int64_t)adj0.nrows()");
+                mainBuilderCode->assign("global_nrows", "(iT)nrows");
+                mainBuilderCode->declare("int64_t", "ncols", "(int64_t)adj0.ncols()");
+                mainBuilderCode->declare("int64_t", "nvals0", "(int64_t)adj0.nvals()");
+            }
+            else
+            {
+                mainBuilderCode->declare("iT", "nrows", "adj0.nrows()");
+                mainBuilderCode->assign("global_nrows", "nrows");
+                mainBuilderCode->declare("iT", "ncols", "adj0.ncols()");
+                mainBuilderCode->declare("nT", "nvals0", "adj0.nvals()");
+            }
 
             mainBuilderCode->comment("Init input with random numbers");
             mainBuilderCode->declare("DM", "input_emb");
@@ -702,16 +713,16 @@ public:
             mainBuilderCode->declare("int64_t", "emb_size", "(int64_t)input_emb.ncols()");
 
             mainBuilderCode->declare("DL", "labels");
-            mainBuilderCode->expr(Code::callFn("readDM_npy<DL>", {"filename + \"Lab.npy\"", "&labels", lab_type + "::DENSE_MTX_TYPE::RM"}));
+            mainBuilderCode->expr(Code::callFn("readDM_npy<DL>", {"filename + \"Lab.npy\"", "&labels", lab_type+"::DENSE_MTX_TYPE::RM"}));
 
             mainBuilderCode->declare("DBL", "train_mask_load");
-            mainBuilderCode->expr(Code::callFn("readDM_npy<DL>", {"filename + \"TnMsk.npy\"", "&train_mask_load", "DL::DENSE_MTX_TYPE::RM"}));
+            mainBuilderCode->expr(Code::callFn("readDM_npy<DBL>", {"filename + \"TnMsk.npy\"", "&train_mask_load", "DBL::DENSE_MTX_TYPE::RM"}));
 
             mainBuilderCode->declare("DBL", "valid_mask_load");
-            mainBuilderCode->expr(Code::callFn("readDM_npy<DL>", {"filename + \"TnMsk.npy\"", "&valid_mask_load", "DL::DENSE_MTX_TYPE::RM"}));
+            mainBuilderCode->expr(Code::callFn("readDM_npy<DBL>", {"filename + \"VlMsk.npy\"", "&valid_mask_load", "DBL::DENSE_MTX_TYPE::RM"}));
 
             mainBuilderCode->declare("DBL", "test_mask_load");
-            mainBuilderCode->expr(Code::callFn("readDM_npy<DL>", {"filename + \"TnMsk.npy\"", "&test_mask_load", "DL::DENSE_MTX_TYPE::RM"}));
+            mainBuilderCode->expr(Code::callFn("readDM_npy<DBL>", {"filename + \"TsMsk.npy\"", "&test_mask_load", "DBL::DENSE_MTX_TYPE::RM"}));
 
             mainBuilderCode->declare("DB", "train_mask");
             mainBuilderCode->expr(Code::callFn("repopulate<DBL, DB>", { "&train_mask_load", "&train_mask"}));
@@ -1831,7 +1842,7 @@ std::vector<torch::Tensor> global_bounds;\n";
                                        "torch::TensorOptions().dtype(torch::kInt).requires_grad(false)");
         mainBuilder.getCode()->declare("auto",
                                        "options_float_tile",
-                                       "torch::TensorOptions().dtype(torch::kFlat).requires_grad(true)");
+                                       "torch::TensorOptions().dtype(torch::kFloat).requires_grad(true)");
     }
 
     void writeCode(std::vector<CIRNode*> &program,
