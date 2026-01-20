@@ -72,6 +72,9 @@ public:
     {
     };
 
+    std::vector<std::string>::iterator begin() { return codeLines.begin(); }
+    std::vector<std::string>::iterator end() { return codeLines.end(); }
+
     int getNum()
     {
         return this->codeLines.size();
@@ -186,13 +189,14 @@ private:
     std::string name;
     std::vector<Arg> args;
     std::string retType;
-    Code body;
+    std::vector<Code> body;
 
 public:
     FunctionBuilder(std::string the_name, std::vector<Arg> the_args, std::string the_retType)
         : name(the_name),
           args(the_args),
-          retType(the_retType)
+          retType(the_retType),
+          body({Code()})
         {}
 
     FunctionBuilder(std::string the_name) : name(the_name) {}
@@ -204,7 +208,37 @@ public:
 
     Code* getCode()
     {
-        return &body;
+        return &body[0];
+    }
+
+    int new_block()
+    {
+        int e = body.size();
+        body.push_back(Code());
+        return e;
+    }
+
+    Code* getCode(uint i)
+    {
+        return &body[i];
+    }
+
+    void writeFunction(std::ofstream &outStream, int indent = 0) {
+        std::string s = "";
+        for (int i = 0; i < indent; ++i) { s += " "; }
+        outStream << s << retType << std::endl;
+        std::vector<std::string> arg_tys;
+        std::string s2 = s + " ";
+        for (auto a : args) {
+           arg_tys.push_back(a.second + " " + a.first);
+        }
+        outStream << s << name << "(" << Code::intersperse(", ", arg_tys) << ") {" << std::endl;
+        for (auto c : body) {
+            for (auto s : c) {
+                outStream << s2 << s << std::endl;
+            }
+        }
+        outStream << s << "}" << std::endl;
     }
 };
 
@@ -262,6 +296,8 @@ class Model
 private:
     // ID for the model
     std::string modelName;
+
+    FunctionBuilder transform{ FunctionBuilder("transform", {std::pair("adj0", "SM&"), std::pair("train_mask", "DB*")}, "void") };
 
     // These are in the main funciton
     // Model component definition (The init of a Torch model)
@@ -323,6 +359,13 @@ public:
     Code* getForwardCallPost()
     {
         return &this->modelForwardCallPost;
+    }
+
+    // This function is called in the constructor on the adj matrix etc to tile it
+    // we will generate the code to perform tiling and then transfer to device
+    FunctionBuilder* getTransform()
+    {
+        return &this->transform;
     }
 
     // Init
@@ -530,10 +573,11 @@ public:
 
     //returns name of segments/total_bounds
     std::pair<std::string, std::string>
-    generateTiling(Code *builder, DataNode *srcNode, DataNode *dNode, std::string tiling_param, std::string suffix)
+    generateTiling(Code *builder, std::string sNodeName, std::string dNodeName, std::string tiling_param)
     {
-        auto dNodeName = dNode->getName() + suffix;
-        auto sNodeName = srcNode->getName() + suffix;
+        // auto dNodeName = dNode->getName() + suffix;
+        // auto sNodeName = srcNode->getName() + suffix;
+        // TODO I think this variable is never used after the push_back
         auto tiled_dnode_vec = builder->declare("std::vector<SM*>", "tiled_" +  dNodeName);
         builder->expr(Code::callMethod(tiled_dnode_vec, "push_back", { "&" + sNodeName }));
         auto total_decls = builder->declare("torch::Tensor", {
@@ -591,7 +635,9 @@ public:
         // transform->getNode2()->getDataInfo()->getDirected() << std::endl;
     }
 
-    std::string generateTransformation(Code* builder, DataNode* srcNode, std::vector<TransformEdge*>& transforms)
+    std::string generateTransformation(Code* builder,
+                                       DataNode* srcNode,
+                                       std::vector<TransformEdge*>& transforms)
     {
         std::string resString = "";
         for (int ix = 0; ix < transforms.size(); ix++)
@@ -606,7 +652,8 @@ public:
                     auto tr = transform->getTransformation(tix);
                     if (tr->getTransformation() == COL_TILE_DOPT)
                     {
-                        auto segmentsAndBounds = generateTiling(builder, srcNode, dNode, tr->getParam(0), "");
+                        // TODO dups?
+                        auto segmentsAndBounds = generateTiling(builder, srcNode->getName(), dNode->getName(), tr->getParam(0));
                         if (!dNode->getDataInfo()->getDirected())
                         {
                             builder->expr(Code::callMethod("global_segments", "push_back", { segmentsAndBounds.first }));
@@ -621,7 +668,7 @@ public:
                             {
                                 tilingParam = tr->getParam(0);
                             }
-                            generateTiling(builder, srcNode, dNode, tilingParam, "_b");
+                            generateTiling(builder, srcNode->getName() + "_b", dNode->getName() + "_b", tilingParam);
                         }
                     } else if (tr->getTransformation() == SUBGRAPH_DOPT)
                     {
@@ -629,7 +676,7 @@ public:
                         {
                             auto forward_adj = builder->declare("std::vector<SM *>", "forward_adj");
                             auto backward_adj = builder->declare("std::vector<SM *>", "backward_adj");
-                            builder->expr(Code::callFn("getMaskSubgraphs", { "&adj0", "&train_mask", tr->getParam(1), forward_adj, backward_adj}));
+                            builder->expr(Code::callFn("getMaskSubgraphs", { "&adj0", "train_mask", tr->getParam(1), forward_adj, backward_adj}));
                             for (int i = 0; i < std::stoi(tr->getParam(1)); i++)
                             {
                                 int iy = std::stoi(tr->getParam(1)) - (i + 1);
@@ -660,6 +707,24 @@ public:
 
     }
 
+    void adjInfoDecls(Code *code)
+    {
+            code->comment("Adj info");
+            if (GALAFEContext::use_long) {
+                code->declare("int64_t", "nrows", "(int64_t)adj0.nrows()");
+                code->assign("global_nrows", "(iT)nrows");
+                code->declare("int64_t", "ncols", "(int64_t)adj0.ncols()");
+                code->declare("int64_t", "nvals0", "(int64_t)adj0.nvals()");
+            }
+            else
+            {
+                code->declare("iT", "nrows", "adj0.nrows()");
+                code->assign("global_nrows", "nrows");
+                code->declare("iT", "ncols", "adj0.ncols()");
+                code->declare("nT", "nvals0", "adj0.nvals()");
+            }
+    }
+
     void generateOpCode(ComputeNode* cNode, int& fcCount, int& fcEdgeCount, int& fcSelfCount,int& epCount, bool outOfLoop, bool& hasFFNEdgeUpdate, bool& hasEdgeMulAggr,
         std::unordered_set<std::string> &encounteredAutograds,
         std::vector<int> &inputSizes,
@@ -688,20 +753,8 @@ public:
                 Code::callFn("readSM_npy32<SM>", { "filename", "&adj0" })
             );
 
-            mainBuilderCode->comment("Adj info");
-            if (GALAFEContext::use_long) {
-                mainBuilderCode->declare("int64_t", "nrows", "(int64_t)adj0.nrows()");
-                mainBuilderCode->assign("global_nrows", "(iT)nrows");
-                mainBuilderCode->declare("int64_t", "ncols", "(int64_t)adj0.ncols()");
-                mainBuilderCode->declare("int64_t", "nvals0", "(int64_t)adj0.nvals()");
-            }
-            else
-            {
-                mainBuilderCode->declare("iT", "nrows", "adj0.nrows()");
-                mainBuilderCode->assign("global_nrows", "nrows");
-                mainBuilderCode->declare("iT", "ncols", "adj0.ncols()");
-                mainBuilderCode->declare("nT", "nvals0", "adj0.nvals()");
-            }
+            adjInfoDecls(mainBuilderCode);
+            adjInfoDecls(model.getTransform()->getCode());
 
             mainBuilderCode->comment("Init input with random numbers");
             mainBuilderCode->declare("DM", "input_emb");
@@ -748,7 +801,7 @@ public:
 
             // Graph output
             auto outputGraph = cNode->getOutput(1);
-            generateTransformation(mainBuilderCode, outputGraph, transforms);
+            generateTransformation(model.getTransform()->getCode(), outputGraph, transforms);
         } else if (cNode->getOp() == AGGREGATE_EDGE_SUM_OP)
         {
             hasFFNEdgeUpdate = true;
@@ -809,11 +862,10 @@ public:\n\
             std::string tempForwardAggrCall = "";
             bool isColTile = hasDOpt(cNode->getInput(2), COL_TILE_DOPT);
             auto inGraphIndx = cNode->getInput(2)->getDataInfo()->getIndex();
+            importCode.declare("const torch::TensorOptions", "options_ones_val",
+                               "torch::TensorOptions().dtype(torch::kFloat).requires_grad(false).device(torch::kCUDA, 0)");
             if (isColTile){
-                std::string normCall = "auto options_ones_val = torch::TensorOptions()\n\
-                           .dtype(torch::kFloat)\n\
-                           .requires_grad(false)\n\
-                           .device(torch::kCUDA, 0);\n\
+                std::string normCall = "\
                 torch::Tensor ones_val = torch::ones({global_nrows, 1}, options_ones_val);\n\
                 torch::Tensor offset_graph_ones_val = global_offset_graph[2 * 0];\n\
                 torch::Tensor columns_graph_ones_val = global_columns_graph[2 * 0];\n\
@@ -835,10 +887,7 @@ public:\n\
             + "(" + cNode->getInput(0)->getName() + "_val, " + cNode->getInput(1)->getName() + "_val, offset_graph_vals, columns_graph_vals, value_graph_vals, bounds_vals, segments_vals).detach();";
             } else
             {
-                std::string normCall = "auto options_ones_val = torch::TensorOptions()\n\
-                           .dtype(torch::kFloat)\n\
-                           .requires_grad(false)\n\
-                           .device(torch::kCUDA, 0);\n\
+                std::string normCall = "\
                 torch::Tensor ones_val = torch::ones({global_nrows, 1}, options_ones_val);\n\
                 torch::Tensor offset_graph_ones_val = global_offset_graph[2 * 0];\n\
                 torch::Tensor columns_graph_ones_val = global_columns_graph[2 * 0];\n\
@@ -1444,27 +1493,18 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
             std::string rowDims = processDims(outputInfo->getDimRow());
             std::string colDims = processDims(outputInfo->getDimCol());
 
+            importCode.declare("const torch::TensorOptions", "auto options_" + cNode->getOutput(0)->getName(),
+                               "torch::TensorOptions().dtype(torch::kFloat).requires_grad(false).device(torch::kCUDA, 0)");
+
             if (outOfLoop)
             {
                 // TODO eventually use a device specific function for this.
-                std::string tempOptionsOnes = "    auto options_" + cNode->getOutput(0)->getName() +" = torch::TensorOptions()\n\
-                       .dtype(torch::kFloat)\n\
-                       .requires_grad(false)\n\
-                       .device(torch::kCUDA, 0);";
-                model.getInv()->addCode(tempOptionsOnes);
-
                 std::string onesCall =  generateOutputString(cNode, outOfLoop) + " = torch::ones({" + rowDims
                 + ", " + colDims + "}, options_" + cNode->getOutput(0)->getName() + ");";
                 model.getInv()->addCode(onesCall);
             } else
             {
                 // TODO eventually use a device specific function for this.
-                std::string tempOptionsOnes = "    auto options_" + cNode->getOutput(0)->getName() +" = torch::TensorOptions()\n\
-                       .dtype(torch::kFloat)\n\
-                       .requires_grad(false)\n\
-                       .device(torch::kCUDA, 0);";
-                model.getForward()->addCode(tempOptionsOnes);
-
                 std::string onesCall =  generateOutputString(cNode, outOfLoop) + " = torch::ones({" + rowDims
                 + ", " + colDims + "}, options_" + cNode->getOutput(0)->getName() + ");";
                 model.getForward()->addCode(onesCall);
@@ -1475,28 +1515,17 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
 
             std::string rowDims = processDims(outputInfo->getDimRow());
             std::string colDims = processDims(outputInfo->getDimCol());
-
+            importCode.declare("const torch::TensorOptions", "auto options_" + cNode->getOutput(0)->getName(),
+                               "torch::TensorOptions().dtype(torch::kFloat).requires_grad(false).device(torch::kCUDA, 0)");
             if (outOfLoop)
             {
                 // TODO eventually use a device specific function for this.
-                std::string tempOptionsOnes = "    auto options_" + cNode->getOutput(0)->getName() +" = torch::TensorOptions()\n\
-                       .dtype(torch::kFloat)\n\
-                       .requires_grad(false)\n\
-                       .device(torch::kCUDA, 0);";
-                model.getInv()->addCode(tempOptionsOnes);
-
                 std::string onesCall =  generateOutputString(cNode, outOfLoop) + " = torch::full({" + rowDims
                 + ", " + colDims + "}, " + cNode->getParam(0) + " * global_segments[0], options_" + cNode->getOutput(0)->getName() + ");";
                 model.getInv()->addCode(onesCall);
             } else
             {
                 // TODO eventually use a device specific function for this.
-                std::string tempOptionsOnes = "    auto options_" + cNode->getOutput(0)->getName() +" = torch::TensorOptions()\n\
-                       .dtype(torch::kFloat)\n\
-                       .requires_grad(false)\n\
-                       .device(torch::kCUDA, 0);";
-                model.getForward()->addCode(tempOptionsOnes);
-
                 std::string onesCall =  generateOutputString(cNode, outOfLoop) + " = torch::full({" + rowDims
                 + ", " + colDims + "}, " + cNode->getParam(0) + " * global_segments[0], options_" + cNode->getOutput(0)->getName() + ");";
                 model.getForward()->addCode(onesCall);
@@ -1836,18 +1865,19 @@ std::vector<torch::Tensor> global_bounds;\n";
 
         importCode.addCode(tempStdCommon);
 
-        mainBuilder.getCode()->addTypedef("typename SM::itype", "iT");
-        mainBuilder.getCode()->addTypedef("typename SM::ntype", "nT");
-        mainBuilder.getCode()->addTypedef("typename SM::vtype", "vT");
-        mainBuilder.getCode()->addTypedef("typename DM::itype", "diT");
-        mainBuilder.getCode()->addTypedef("typename DM::ntype", "dnT");
-        mainBuilder.getCode()->addTypedef("typename DM::vtype", "dvT");
-        mainBuilder.getCode()->declare("auto",
-                                       "options_int_tile",
-                                       "torch::TensorOptions().dtype(torch::kInt).requires_grad(false)");
-        mainBuilder.getCode()->declare("auto",
-                                       "options_float_tile",
-                                       "torch::TensorOptions().dtype(torch::kFloat).requires_grad(true)");
+        importCode.addTypedef("typename SM::itype", "iT");
+        importCode.addTypedef("typename SM::ntype", "nT");
+        importCode.addTypedef("typename SM::vtype", "vT");
+        importCode.addTypedef("typename DM::itype", "diT");
+        importCode.addTypedef("typename DM::ntype", "dnT");
+        importCode.addTypedef("typename DM::vtype", "dvT");
+
+        importCode.declare("const torch::TensorOptions",
+                           "options_int_tile",
+                           "torch::TensorOptions().dtype(torch::kInt).requires_grad(false)");
+        importCode.declare("const torch::TensorOptions",
+                           "options_float_tile",
+                           "torch::TensorOptions().dtype(torch::kFloat).requires_grad(true)");
     }
 
     void writeCode(std::vector<CIRNode*> &program,
@@ -1873,6 +1903,7 @@ std::vector<torch::Tensor> global_bounds;\n";
         // std::cout << "Works2" << std::endl;
         this->writeCode(kernelCallCode, outStreamModel);
         this->writeCode(*model.getDef(), outStreamModel);
+        model.getTransform()->writeFunction(outStreamModel);
         this->writeCode(*model.getInitCall(), outStreamModel, ", ", true, true);
         this->writeCode(*model.getInit(), outStreamModel);
         // std::cout << "Works3" << std::endl;

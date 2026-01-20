@@ -1056,19 +1056,19 @@ int printMemoryUsage() {\n\
         std::string t_offsets, t_cols, t_vals;
         if (isColTile)
         {
-            t_offsets = tensorFromBlob(mainBuilder.getCode(),
+            t_offsets = tensorFromBlob(model.getTransform()->getCode(),
                                        "int",
                                        "t_offsets"+std::to_string(indexData)+suffix,
                                        "offset_ptr_"+dataName+suffix,
                                        { Code::binOp("*", Code::binOp("+", "nrows", "1"), "segments_"+dataName+suffix) },
                                        "options_cu_int");
-            t_cols = tensorFromBlob(mainBuilder.getCode(),
+            t_cols = tensorFromBlob(model.getTransform()->getCode(),
                                     "int",
                                     "t_cols"+std::to_string(indexData)+suffix,
                                     "col_ptr_"+dataName+suffix,
                                     { "nvals"+std::to_string(indexData) },
                                     "options_cu_int");
-            t_vals = tensorFromBlob(mainBuilder.getCode(),
+            t_vals = tensorFromBlob(model.getTransform()->getCode(),
                                     "float",
                                     "t_vals"+std::to_string(indexData)+suffix,
                                     "val_ptr_"+dataName+suffix,
@@ -1076,32 +1076,28 @@ int printMemoryUsage() {\n\
                                     "options_cu_float_ngrad");
         } else
         {
-            t_offsets = tensorFromBlob(mainBuilder.getCode(),
+            t_offsets = tensorFromBlob(model.getTransform()->getCode(),
                                        "int",
                                        "t_offsets"+std::to_string(indexData)+suffix,
                                        Code::callMethod("adj"+std::to_string(indexData)+suffix, "offset_ptr"),
                                        { Code::binOp("+", "nrows", "1") },
                                        "options_cu_int");
-            t_cols = tensorFromBlob(mainBuilder.getCode(),
+            t_cols = tensorFromBlob(model.getTransform()->getCode(),
                                        "int",
-                                       "t_cols"+std::to_string(indexData),
+                                       "t_cols"+std::to_string(indexData)+suffix,
                                        Code::callMethod("adj"+std::to_string(indexData)+suffix, "ids_ptr"),
                                        { "nvals"+std::to_string(indexData) },
                                        "options_cu_int");
-            t_vals = tensorFromBlob(mainBuilder.getCode(),
+            t_vals = tensorFromBlob(model.getTransform()->getCode(),
                                        "float",
                                        "t_vals"+std::to_string(indexData)+suffix,
                                        Code::callMethod("adj"+std::to_string(indexData)+suffix, "vals_ptr"),
                                        { "nvals"+std::to_string(indexData) },
                                        "options_cu_float_ngrad");
         }
-        // mainBuilder.getCode()->assign(t_offsets, Code::callMethod(t_offsets, "to", { "device" }));
-        // mainBuilder.getCode()->assign(t_cols, Code::callMethod(t_cols, "to", { "device" }));
-        // mainBuilder.getCode()->assign(t_vals, Code::callMethod(t_vals, "to", { "device" }));
-
-        mainBuilder.getCode()->expr(Code::callMethod("global_offset_graph", "push_back", { t_offsets}));
-        mainBuilder.getCode()->expr(Code::callMethod("global_columns_graph", "push_back", { t_cols }));
-        mainBuilder.getCode()->expr(Code::callMethod("global_value_graph", "push_back", { t_vals }));
+        model.getTransform()->getCode()->expr(Code::callMethod("global_offset_graph", "push_back", { t_offsets}));
+        model.getTransform()->getCode()->expr(Code::callMethod("global_columns_graph", "push_back", { t_cols }));
+        model.getTransform()->getCode()->expr(Code::callMethod("global_value_graph", "push_back", { t_vals }));
 
         return std::tuple(t_offsets, t_cols, t_vals);
     }
@@ -1150,9 +1146,9 @@ int printMemoryUsage() {\n\
                             // These are graphs for backprop
                             if (!inputInfo->getDefaultDirected())
                             {
-                                mainBuilder.getCode()->expr(Code::callMethod("global_offset_graph", "push_back", { t_offsets}));
-                                mainBuilder.getCode()->expr(Code::callMethod("global_columns_graph", "push_back", { t_cols }));
-                                mainBuilder.getCode()->expr(Code::callMethod("global_value_graph", "push_back", { t_vals }));
+                                model.getTransform()->getCode()->expr(Code::callMethod("global_offset_graph", "push_back", { t_offsets}));
+                                model.getTransform()->getCode()->expr(Code::callMethod("global_columns_graph", "push_back", { t_cols }));
+                                model.getTransform()->getCode()->expr(Code::callMethod("global_value_graph", "push_back", { t_vals }));
                             } else
                             {
                                 generateCudaTransfer(isColTile, indexData, dataName, "_b");
@@ -1192,9 +1188,9 @@ int printMemoryUsage() {\n\
                     // These are graphs for backprop
                     if (!inputInfo->getDefaultDirected())
                     {
-                        mainBuilder.getCode()->expr(Code::callMethod("global_offset_graph", "push_back", { t_offsets}));
-                        mainBuilder.getCode()->expr(Code::callMethod("global_columns_graph", "push_back", { t_cols }));
-                        mainBuilder.getCode()->expr(Code::callMethod("global_value_graph", "push_back", { t_vals }));
+                        model.getTransform()->getCode()->expr(Code::callMethod("global_offset_graph", "push_back", { t_offsets}));
+                        model.getTransform()->getCode()->expr(Code::callMethod("global_columns_graph", "push_back", { t_cols }));
+                        model.getTransform()->getCode()->expr(Code::callMethod("global_value_graph", "push_back", { t_vals }));
                     } else
                     {
                         generateCudaTransfer(isColTile, indexData, inputData->getName(), "_b");
@@ -1235,11 +1231,11 @@ int printMemoryUsage() {\n\
         // TODO make the transfer based on the data and the transformations applied
         // Add the graph parts to a vector
         mainBuilder.getCode()->declare_cstr_init("torch::Device", "device", "torch::kCUDA");
-        mainBuilder.getCode()->declare("auto", "options_cu_int", "torch::TensorOptions().dtype(torch::kInt).requires_grad(false).device(torch::kCUDA, 0)");
-        mainBuilder.getCode()->declare("auto", "options_cu_float_grad", "torch::TensorOptions().dtype(torch::kFloat).requires_grad(true).device(torch::kCUDA, 0)");
-        mainBuilder.getCode()->declare("auto", "options_cu_float_ngrad", "torch::TensorOptions().dtype(torch::kFloat).requires_grad(false).device(torch::kCUDA, 0)");
-        mainBuilder.getCode()->declare("auto", "options_cu_bool", "torch::TensorOptions().dtype(torch::kBool).requires_grad(false).device(torch::kCUDA, 0)");
-        mainBuilder.getCode()->declare("auto", "options_cu_long", "torch::TensorOptions().dtype(torch::kLong).device(torch::kCUDA, 0)");
+        importCode.declare("const torch::TensorOptions", "options_cu_int", "torch::TensorOptions().dtype(torch::kInt).requires_grad(false).device(torch::kCUDA, 0)");
+        importCode.declare("const torch::TensorOptions", "options_cu_float_grad", "torch::TensorOptions().dtype(torch::kFloat).requires_grad(true).device(torch::kCUDA, 0)");
+        importCode.declare("const torch::TensorOptions", "options_cu_float_ngrad", "torch::TensorOptions().dtype(torch::kFloat).requires_grad(false).device(torch::kCUDA, 0)");
+        importCode.declare("const torch::TensorOptions", "options_cu_bool", "torch::TensorOptions().dtype(torch::kBool).requires_grad(false).device(torch::kCUDA, 0)");
+        importCode.declare("const torch::TensorOptions", "options_cu_long", "torch::TensorOptions().dtype(torch::kLong).device(torch::kCUDA, 0)");
 
         // For now there's no slicing for a dense input so just use a hard-coded code-generation.
         auto t_iden       = tensorFromBlob(mainBuilder.getCode(), "float", "t_iden", Code::callMethod("input_emb", "vals_ptr"), { "nrows", "emb_size" }, "options_cu_float_grad");
@@ -1247,12 +1243,6 @@ int printMemoryUsage() {\n\
         auto t_train_mask = tensorFromBlob(mainBuilder.getCode(), "bool", "t_train_mask", Code::callMethod("train_mask", "vals_ptr"), { "nrows" }, "options_cu_bool");
         auto t_valid_mask = tensorFromBlob(mainBuilder.getCode(), "bool", "t_valid_mask", Code::callMethod("valid_mask", "vals_ptr"), { "nrows" }, "options_cu_bool");
         auto t_test_mask  = tensorFromBlob(mainBuilder.getCode(), "bool", "t_test_mask", Code::callMethod("test_mask", "vals_ptr"), { "nrows" }, "options_cu_bool");
-
-        // mainBuilder.getCode()->assign(t_iden, Code::callMethod(t_iden, "to", { "device" }));
-        // mainBuilder.getCode()->assign(t_labs, Code::callMethod(t_labs, "to", { "device" }));
-        // mainBuilder.getCode()->assign(t_train_mask, Code::callMethod(t_train_mask, "to", { "device" }));
-        // mainBuilder.getCode()->assign(t_valid_mask, Code::callMethod(t_valid_mask, "to", { "device" }));
-        // mainBuilder.getCode()->assign(t_test_mask, Code::callMethod(t_test_mask, "to", { "device" }));
 
         cudaTransfer(program);
 
