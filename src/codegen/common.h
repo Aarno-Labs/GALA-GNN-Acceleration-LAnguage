@@ -186,10 +186,23 @@ public:
     }
 };
 
+class FunctionParameter
+{
+private:
+    std::string type;
+    std::string name;
+
+public:
+    FunctionParameter(std::string type, std::string name)
+        : type(std::move(type)), name(std::move(name)) {}
+
+    const std::string& getName() const { return name; }
+    const std::string& getType() const { return type; }
+};
+
 class FunctionBuilder
 {
-    // name, type
-    typedef std::pair<std::string, std::string> Arg;
+    typedef FunctionParameter Arg;
 private:
     std::string name;
     std::vector<Arg> args;
@@ -206,9 +219,9 @@ public:
 
     FunctionBuilder(std::string the_name) : name(the_name) {}
 
-    void addArgument(std::string name, std::string type)
+    void addArgument(std::string type, std::string name)
     {
-        args.push_back(std::pair(name, type));
+        args.push_back(FunctionParameter(type, name));
     }
 
     Code* getCode()
@@ -242,8 +255,8 @@ public:
             outStream << retType << " ";
         }
         std::vector<std::string> arg_tys;
-        for (auto a : args) {
-           arg_tys.push_back(a.second + " " + a.first);
+        for (const auto& a : args) {
+           arg_tys.push_back(a.getType() + " " + a.getName());
         }
         if (ns != "") {
             outStream << ns <<  "::";
@@ -345,10 +358,10 @@ struct TorchModule
 
     // name/type/init
     FunctionBuilder transform{
-      FunctionBuilder("transform", {std::pair("adj0", "SM&"), std::pair("train_mask", "DB*")}, "void")
+      FunctionBuilder("transform", {FunctionParameter("SM&", "adj0"), FunctionParameter("DB*", "train_mask")}, "void")
     };
     FunctionBuilder constructor{
-      FunctionBuilder("GALAGNN", {std::pair("adj0", "SM&"), std::pair("train_mask", "DB*")}, "")
+      FunctionBuilder("GALAGNN", {FunctionParameter("SM&", "adj0"), FunctionParameter("DB*", "train_mask")}, "")
     };
     FunctionBuilder forward{
       FunctionBuilder("forward", {}, "std::vector<torch::Tensor>", 2)
@@ -555,7 +568,7 @@ protected:
 
 
     FunctionBuilder mainBuilder{
-      FunctionBuilder("main", { std::pair("argc", "int"), std::pair("argv", "char**") }, "int")
+      FunctionBuilder("main", {FunctionParameter("int", "argc"), FunctionParameter("char**", "argv")}, "int")
     };
 
     std::vector<std::string> generatedFunctions;
@@ -1216,7 +1229,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                    + "_AutoGrad::apply(this, t_iden, 0);";
                         std::string aggrResStr = ", t_iden_n";
                         model.getCall()->addCode(aggrResStr);
-                        model.getGalaGNN()->forward.addArgument("t_iden_n", "torch::Tensor");
+                        model.getGalaGNN()->forward.addArgument("torch::Tensor", "t_iden_n");
                     } else
                     {
                         tempForwardAggrCall =  "t_iden = " + getKernelName(cNode)
@@ -1308,7 +1321,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                    + "_AutoGrad::apply(this, t_iden, 0);";
                         std::string aggrResStr = ", t_iden_n";
                         model.getCall()->addCode(aggrResStr);
-                        model.getGalaGNN()->forward.addArgument("t_iden_n", "torch::Tensor");
+                        model.getGalaGNN()->forward.addArgument("torch::Tensor", "t_iden_n");
                     } else
                     {
                         tempForwardAggrCall =  "t_iden = " + getKernelName(cNode)
@@ -1461,7 +1474,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 // TODO: Temporary method to add kernel call
                 std::string tempPassDegree = "," + cNode->getOutput(0)->getName();
                 model.getCall()->addCode(tempPassDegree);
-                model.getGalaGNN()->forward.addArgument(cNode->getOutput(0)->getName(), "torch::Tensor");
+                model.getGalaGNN()->forward.addArgument("torch::Tensor", cNode->getOutput(0)->getName());
             } else
             {
                 std::string powerCall = "        " + generateOutputString(cNode, outOfLoop) + " = torch::pow(" + cNode->getInput(0)->getName() + ", " + cNode->getParam(0) + ");";
@@ -1509,10 +1522,10 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
             if (fcCount == 0)
             {
                 std::string inSize1 = "size" + std::to_string(fcCount);
-                model.getConstructor()->addArgument(inSize1, "int");
+                model.getConstructor()->addArgument("int", inSize1);
 
                 std::string inSize2 = "size" + std::to_string(fcCount + 1);
-                model.getConstructor()->addArgument(inSize2, "int");
+                model.getConstructor()->addArgument("int", inSize2);
 
                 std::string fc = model.addField("fc" + std::to_string(fcCount), "torch::nn::Linear", std::optional("nullptr"));
 
@@ -1547,7 +1560,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
             } else
             {
                 std::string inSize2 = "size" + std::to_string(fcCount + 1);
-                model.getConstructor()->addArgument(inSize2, "int");
+                model.getConstructor()->addArgument("int", inSize2);
 
                 auto fc = model.addField("fc" + std::to_string(fcCount), "torch::nn::Linear", std::optional("nullptr"));
                 model.getConstructor()->getCode()->assign(
@@ -1711,7 +1724,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
 
             } else {
                 // TODO generate this based on the program
-                model.getGalaGNN()->forward.addArgument("t_iden", "torch::Tensor");
+                model.getGalaGNN()->forward.addArgument("torch::Tensor", "t_iden");
 
                 std::unordered_set<std::string> encounteredTensors;
                 // std::string resInit = "torch::Tensor res = input_dense;";
@@ -1737,8 +1750,8 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 }
                 // generateOpCode above may add additional tensor arguments, so
                 // we add these int parameters here
-                model.getGalaGNN()->forward.addArgument("ep", "int");
-                model.getGalaGNN()->forward.addArgument("mod_v", "int");
+                model.getGalaGNN()->forward.addArgument("int", "ep");
+                model.getGalaGNN()->forward.addArgument("int", "mod_v");
 
                 CIRNode* inNode = loopNode->getNode(loopNode->getLoopNodeNum()-1);
                 auto cNode = dynamic_cast<ComputeNode*>(inNode);
