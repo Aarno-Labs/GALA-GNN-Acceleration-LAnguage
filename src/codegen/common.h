@@ -576,15 +576,17 @@ public:
     {
         if (val < 0)
         {
+            // TODO this is assuming the negative values are only
+            // ever in the GALAGNN instantiation in main
             if (val == -1)
             {
-                return "global_nrows";
+                return "adj0.nrows()";
             } else if (val == -2)
             {
-                return "global_emb_size";
+                return "input_emb.ncols()";
             } else if (val == -3)
             {
-                return "global_classes";
+                return "classes";
             } else
             {
                 // TODO
@@ -828,14 +830,12 @@ public:
             code->comment("Adj info");
             if (GALAFEContext::use_long) {
                 code->declare("int64_t", "nrows", "(int64_t)adj0.nrows()");
-                code->assign("global_nrows", "(iT)nrows");
                 code->declare("int64_t", "ncols", "(int64_t)adj0.ncols()");
                 code->declare("int64_t", "nvals0", "(int64_t)adj0.nvals()");
             }
             else
             {
                 code->declare("iT", "nrows", "adj0.nrows()");
-                code->assign("global_nrows", "nrows");
                 code->declare("iT", "ncols", "adj0.ncols()");
                 code->declare("nT", "nvals0", "adj0.nvals()");
             }
@@ -869,8 +869,11 @@ public:
                 Code::callFn("readSM_npy32<SM>", { "filename", "&adj0" })
             );
 
+            auto nrow_assignment = GALAFEContext::use_long ? "(iT)nrows" : "nrows";
+
             adjInfoDecls(mainBuilderCode);
             adjInfoDecls(model.getTransform()->getCode());
+            model.getTransform()->getCode()->assign("global_nrows", nrow_assignment);
 
             mainBuilderCode->comment("Init input with random numbers");
             mainBuilderCode->declare("DM", "input_emb");
@@ -912,8 +915,9 @@ public:
                 { "labels.vals_ptr(), labels.vals_ptr() + labels.nvals()" }
             );
             mainBuilderCode->declare("int", "classes", "1 + *" + call_max);
-            mainBuilderCode->assign("global_classes", "classes");
-            mainBuilderCode->assign("global_emb_size", "emb_size");
+            // TODO make sure these can be removed
+            // mainBuilderCode->assign("global_classes", "classes");
+            // mainBuilderCode->assign("global_emb_size", "emb_size");
 
             // Graph output
             auto outputGraph = cNode->getOutput(1);
@@ -972,7 +976,8 @@ public:\n\
         torch::Tensor back_res = node_spmv_backward_of_sddmm_eaggr(\n\
                     offset_graph, columns_graph, // This should be the reverse graph\n\
                     d_value_graph, bounds, nrows, segments);\n\
-        return {back_res,\n\
+        return {torch::Tensor(),\n\
+                back_res,\n                       \
                 back_res,\n\
                 torch::Tensor()};\n\
     }\n\
@@ -1103,7 +1108,7 @@ public:\n\
         accum, offset_graph, columns_graph, value_graph, bounds, global_nrows,\n\
         segments);\n\
     res = sds - res;\n\
-    return {res, torch::Tensor()};\n\
+    return {torch::Tensor(), res, torch::Tensor()};\n\
   }\n\
 };\n";
                 kernelCallCode.addCode(autoGradFunction);
@@ -1150,9 +1155,6 @@ public:\n\
     public:\n\
         static torch::Tensor forward(torch::autograd::AutogradContext *ctx,\n\
                                      GALAGNN &gnn,\n\
-                                     std::vector<torch::Tensor> &global_offset_graph,\n\
-                                     std::vector<torch::Tensor> &global_columns_graph,\n\
-                                     std::vector<torch::Tensor> &global_value_graph,\n\
                                      torch::Tensor input_dense, torch::Tensor value_graph, int li) {\n\
             ctx->saved_data[\"li\"] = li;\n\
             torch::Tensor offset_graph = global_offset_graph[2 * li];\n\
@@ -1193,7 +1195,7 @@ public:\n\
                 {
                     // TODO add codegen for non-col tile
                     autoGradFunction += "\
-            return {" + getKernelName(cNode) + "_call(dZ, offset_graph, columns_graph,\n\
+            return {torch::Tensor()," + getKernelName(cNode) + "_call(dZ, offset_graph, columns_graph,\n\
                                        value_graph),\n\
 edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
            global_nrows, 1), torch::Tensor()};\n";
@@ -1284,11 +1286,11 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 if (isColTile){
                     autoGradFunction += "        torch::Tensor bounds = saved[3];\n\
             int segments = ctx->saved_data[\"segments\"].toInt();\n\
-            return {" + getKernelName(cNode) + "_call(input_dense, offset_graph, columns_graph, value_graph, bounds, nrows, segments), torch::Tensor()};";
+            return {torch::Tensor(), " + getKernelName(cNode) + "_call(input_dense, offset_graph, columns_graph, value_graph, bounds, nrows, segments), torch::Tensor()};";
                 } else
                 {
                     autoGradFunction += "\
-            return {" + getKernelName(cNode) + "_call(input_dense, offset_graph, columns_graph,\n\
+            return {torch::Tensor(), " + getKernelName(cNode) + "_call(input_dense, offset_graph, columns_graph,\n\
                                        value_graph), torch::Tensor()};\n";
                 }
         autoGradFunction += "\
@@ -1639,6 +1641,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
             importCode.declare("const torch::TensorOptions", "auto options_" + cNode->getOutput(0)->getName(),
                                "torch::TensorOptions().dtype(torch::kFloat).requires_grad(false).device(torch::kCUDA, 0)");
 
+            cout << "ASDFSDFAS " << outOfLoop << std::endl;
             if (outOfLoop)
             {
                 // TODO eventually use a device specific function for this.
@@ -1744,13 +1747,11 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 model.getForwardCode()->addCode(tempReturn);
 
                 std::string tempModelInit = "auto net = std::make_shared<GALAGNN>(";
+                tempModelInit += "adj0, &train_mask";
                 for (int ei = 0; ei < inputSizes.size(); ei++)
                 {
+                    tempModelInit += ", ";
                     tempModelInit += processDims(inputSizes[ei]);
-                    if (ei < inputSizes.size() - 1)
-                    {
-                        tempModelInit += ", ";
-                    }
                 }
                 tempModelInit += ");";
                 model.getPreCall()->addCode(tempModelInit);
