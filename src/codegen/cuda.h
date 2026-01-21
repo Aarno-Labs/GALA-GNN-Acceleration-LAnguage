@@ -445,10 +445,9 @@ C[((((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) * dcols +\n\
                    torch::Tensor value_graph\n";
             if (isColTile)
             {
-                aggrKernelCall += ", torch::Tensor bounds,\n int segments";
+                aggrKernelCall += ", torch::Tensor bounds,\n int nrows, int segments";
             }
             aggrKernelCall += ") {\n\
-auto nrows = global_nrows;\n\
 auto nvals = columns_graph.numel();\n\
 auto full_iden = input_dense.numel();\n\
 auto dcols = full_iden / nrows;\n\
@@ -923,7 +922,6 @@ torch::Tensor bounds, int nrows, int segments) {\n\
                                torch::Tensor value_graph,\n\
                                int nrows) {\n\
   auto nvals = columns_graph.numel();\n\
-  auto nrows = global_nrows;\n\
   auto full_iden = input_dense1.numel();\n\
   auto dcols = full_iden / nrows;\n\
   // // Dense\n\
