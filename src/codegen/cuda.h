@@ -872,9 +872,9 @@ torch::Tensor bounds, int nrows, int segments) {\n\
                                torch::Tensor offset_graph,\n\
                                torch::Tensor columns_graph,\n\
                                torch::Tensor value_graph, torch::Tensor bounds,\n\
+                               int nrows,\n\
                                int segments) {\n\
   auto nvals = columns_graph.numel();\n\
-  auto nrows = global_nrows;\n\
   auto full_iden = input_dense1.numel();\n\
   auto dcols = full_iden / nrows;\n\
   // // Dense\n\
@@ -920,7 +920,8 @@ torch::Tensor bounds, int nrows, int segments) {\n\
                                torch::Tensor input_dense2,\n\
                                torch::Tensor offset_graph,\n\
                                torch::Tensor columns_graph,\n\
-                               torch::Tensor value_graph) {\n\
+                               torch::Tensor value_graph,\n\
+                               int nrows) {\n\
   auto nvals = columns_graph.numel();\n\
   auto nrows = global_nrows;\n\
   auto full_iden = input_dense1.numel();\n\
