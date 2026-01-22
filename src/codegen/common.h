@@ -1654,7 +1654,6 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
             importCode.declare("const torch::TensorOptions", "auto options_" + cNode->getOutput(0)->getName(),
                                "torch::TensorOptions().dtype(torch::kFloat).requires_grad(false).device(torch::kCUDA, 0)");
 
-            cout << "ASDFSDFAS " << outOfLoop << std::endl;
             if (outOfLoop)
             {
                 // TODO eventually use a device specific function for this.
