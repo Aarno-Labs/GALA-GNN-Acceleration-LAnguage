@@ -1,6 +1,3 @@
-#include <pybind11/pybind11.h>
-//
-//
 #include "common.h"
 #include <iostream>
 
@@ -135,8 +132,9 @@ int main(int argc, char **argv) {
 		GALATransformations::sparsityAwareRewrites(GALAFEContext::program, GALAFEContext::dependencies,
 		GALAFEContext::associations, GALAFEContext::transforms);
 	}
+    // TODO make sure it's some kind of library def (for some notion of this...)
 	genCode.writeCode(GALAFEContext::program, GALAFEContext::dependencies,
-		GALAFEContext::associations, GALAFEContext::transforms, m1.generate_main);
+		GALAFEContext::associations, GALAFEContext::transforms, false, true);
 
 	end = get_time();
 	std::cout << "Time taken for GALA compilation: " << (end - start)*1000  << std::endl;

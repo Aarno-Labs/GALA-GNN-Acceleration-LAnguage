@@ -114,6 +114,11 @@ public:
         return var;
     }
 
+    void ret(std::string e)
+    {
+        addStatement("return " + e);
+    }
+
     void assign(std::string v, std::string e)
     {
         addStatement(v + " = " + e);
@@ -170,10 +175,16 @@ public:
         return name + "(" + intersperse(", ", args) + ")";
     }
 
-        static std::string callMethod(std::string recv, std::string name, std::vector<std::string> args = {})
+    static std::string callMethod(std::string recv, std::string name, std::vector<std::string> args = {})
     {
         return callFn(recv + "." + name, args);
     }
+
+    static std::string callMethodPtr(std::string recv, std::string name, std::vector<std::string> args = {})
+    {
+        return callFn(recv + "->" + name, args);
+    }
+
 
     void addCode(std::string& newCode)
     {
@@ -219,9 +230,10 @@ public:
 
     FunctionBuilder(std::string the_name) : name(the_name) {}
 
-    void addArgument(std::string type, std::string name)
+    std::string addArgument(std::string type, std::string name)
     {
         args.push_back(FunctionParameter(type, name));
+        return name;
     }
 
     Code* getCode()
@@ -428,6 +440,22 @@ private:
     Code modelInitCall;
     // Model forward
     Code modelForward;
+    // smart GALAGNN constructor from ints/tensors
+    FunctionBuilder pythonConstructor{
+      FunctionBuilder(
+        "make",
+        { FunctionParameter("int", "nrows"),
+          FunctionParameter("int", "ncols"),
+          FunctionParameter("int", "nvals"),
+          FunctionParameter("torch::Tensor", "val"),
+          FunctionParameter("torch::Tensor", "col"),
+          FunctionParameter("torch::Tensor", "offsets"),
+          FunctionParameter("std::optional<torch::Tensor>", "train_mask"),
+          // layer sizes go here
+        },
+        "std::shared_ptr<GALAGNN>"
+      )
+    };
 
 public:
     Model()
@@ -472,6 +500,11 @@ public:
     TorchModule* getGalaGNN()
     {
         return &this->galagnn;
+    }
+
+    FunctionBuilder* getPythonConstructor()
+    {
+        return &this->pythonConstructor;
     }
 
     // This function is called in the constructor on the adj matrix etc to tile it
@@ -1691,6 +1724,31 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
         }
     }
 
+    void generatePythonConstructor(std::vector<int>& inputSizes)
+    {
+        Code *make = model.getPythonConstructor()->getCode();
+        // Add arguments
+        std::vector<std::string> args;
+        args.push_back("*a");
+        args.push_back("nullptr");
+        for (int i = 0; i < inputSizes.size(); ++i)
+        {
+            auto s = model.getPythonConstructor()->addArgument("int", "size" + std::to_string(i));
+            args.push_back(s);
+        }
+        // Construct adj matrix
+        auto sm = make->declare("SM*", "a", "new SM");
+        make->expr(Code::callMethodPtr(
+                       sm,
+                       "import_mtx",
+                       {"nrows", "ncols", "nvals",
+                        Code::callMethod("col", "data_ptr<iT>"),
+                        Code::callMethod("val", "data_ptr<vT>"),
+                        Code::callMethod("offsets", "data_ptr<nT>"),
+                        "CSRC_TYPE::CSR"}));
+        make->ret(Code::callFn("std::make_shared<GALAGNN>", args));
+    }
+
 // TODO Put this in the common codegen? Doesn't seem to have any context specific content yet
     void generateCode(std::vector<CIRNode*>& program,
         std::vector<TransformEdge*>& transforms)
@@ -1877,6 +1935,9 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
             Code::callFn(model.getInvFunction()->getName(), {})
         );
 
+        // Generate smart constructor for python
+        generatePythonConstructor(inputSizes);
+
         std::string printTimes;
         if (GALAFEContext::print_accuracy)
         {
@@ -2015,7 +2076,8 @@ typedef CSRCMatrix<ind1_t, ind2_t, val_t> SM;\n";
         std::vector<RelationEdge*>& dependencies,
         std::vector<RelationEdge*>& associations,
         std::vector<TransformEdge*>& transforms,
-        bool write_main = true)
+        bool write_main = true,
+        bool write_pybindings = false)
     {
         // Kernel code - Architecture dependant
         // CMake (also has write for now?)
@@ -2045,21 +2107,21 @@ typedef CSRCMatrix<ind1_t, ind2_t, val_t> SM;\n";
         if (write_main) {
             outStreamModel << "int main(int argc, char **argv) {" << std::endl;
             this->writeCode(*mainBuilder.getCode(), outStreamModel);
-            // std::cout << "Works4" << std::endl;
-            // outStreamModel << "// INV >>" << std::endl;
-            // this->writeCode(*model.getInv(), outStreamModel);
-            // outStreamModel << "// INV <<" << std::endl;
-            outStreamModel << "// PreCall >>" << std::endl;
             this->writeCode(*model.getPreCall(), outStreamModel, "");
-            outStreamModel << "// PreCall <<" << std::endl;
-            outStreamModel << "// getCall >>" << std::endl;
             this->writeCode(*model.getCall(), outStreamModel, "");
-            outStreamModel << "// getCall <<" << std::endl;
-            outStreamModel << "// postCall >>" << std::endl;
             this->writeCode(*model.getPostCall(), outStreamModel);
-            outStreamModel << "// postCall <<" << std::endl;
-            // std::cout << "Works5" << std::endl;
             this->writeCode(postCode, outStreamModel);
+        }
+
+        if (write_pybindings) {
+            model.getPythonConstructor()->writeFunction(outStreamModel);
+            outStreamModel << "\
+PYBIND11_MODULE(gala_model, m) {\n\
+  torch::python::bind_module<GALAGNN>(m, \"GALAGNN\")\n\
+    .def(\"forward\", &GALAGNN::forward);\n\
+\n\
+  m.def(\"make\", &make);\n\
+}\n";
         }
 
         this->closeStream();

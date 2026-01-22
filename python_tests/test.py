@@ -23,22 +23,27 @@ def load_adj_matrix() -> sparse.csr_matrix:
     (data, (adj_row_ids, adj_col_ids))
   )
 
-def prepare_adj_matrix(m: sparse.csr_matrix):
+def make(m: sparse.csr_matrix):
   vals = torch.tensor(m.data, dtype=torch.float32)
   cols = torch.tensor(m.indices, dtype=torch.int32)
   offsets = torch.tensor(m.indptr, dtype=torch.int32)
   # Is this the schedule?
-  return gala_model.prepare(
+  return gala_model.make(
     m.shape[0],
     m.shape[1],
     m.size, 
     vals, 
     cols, 
-    offsets
+    offsets,
+    None,
+    1433,
+    32,
+    7,
+    7
   )
 
 adj_mtx_sparse = load_adj_matrix()
-m = prepare_adj_matrix(adj_mtx_sparse)
+m = make(adj_mtx_sparse)
 
 # These are row major ..?
 input_emb = torch.from_numpy(numpy.load(DATA_PATH / "Feat.npy"))
@@ -62,17 +67,22 @@ test_mask = test_mask_load.to(device=device)
 m.to(device=device, dtype=None)
 
 opt = torch.optim.Adam(m.parameters(), lr=0.01, weight_decay=5e-4)
-for epoch in range(100):
+for epoch in range(5000):
+  torch.cuda.synchronize()
   opt.zero_grad()
+  torch.cuda.synchronize()
   prediction = m.forward(input_emb, epoch, 1)[0]
+  torch.cuda.synchronize()
   prediction_train = prediction[train_mask.reshape(2708)]
   labels_train = labels[train_mask.reshape(2708)]
   criterion = torch.nn.CrossEntropyLoss()
   d_loss = criterion(prediction_train, labels_train.reshape(140))
+  torch.cuda.synchronize()
   d_loss.backward()
+  torch.cuda.synchronize()
   opt.step()
 
-prediction = m.forward(input_emb, 100, 1)[0]
+prediction = m.forward(input_emb, 10000, 1)[0]
 predict_validate = prediction[valid_mask.reshape(2708)]
 labels_validate = labels[valid_mask.reshape(2708)]
 criterion = torch.nn.CrossEntropyLoss()

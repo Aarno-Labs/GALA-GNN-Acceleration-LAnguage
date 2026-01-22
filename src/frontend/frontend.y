@@ -69,14 +69,16 @@ bool print_accuracy = false;
 %type <vval> library model_program
 
 %%
-library : model_program { m1.generate_main = false; }
-model_program : {} 
-  | statement model_program { } 
-  | layers model_def model_init schedules {}
-
 program : load_dataset algorithm schedules {}
+      //  | library {}
 ;
-load_dataset : IDENTIFIER ASSIGN LOAD LPAREN string RPAREN SEMICOLON 
+/* library : model_program { m1.generate_main = false; } */
+/* ; */
+/* model_program : {} */
+/*   | statement model_program { } */
+/*   | layers model_def model_init schedules {} */
+/* ; */
+load_dataset : IDENTIFIER ASSIGN LOAD LPAREN string RPAREN SEMICOLON
     { m1.dataset_name = $5; }
 ;
 algorithm : { }
