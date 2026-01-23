@@ -338,76 +338,115 @@ public:
     }
 };
 
-struct TorchModule
+class Class
 {
-    typedef std::tuple<std::string, std::string, std::optional<string>> private_field;
-
-    const private_field offset_graph  = std::tuple("global_offset_graph", "std::vector<torch::Tensor>", std::optional<std::string>());
-    const private_field columns_graph = std::tuple("global_columns_graph", "std::vector<torch::Tensor>", std::optional<std::string>());
-    const private_field value_graph   = std::tuple("global_value_graph", "std::vector<torch::Tensor>", std::optional<std::string>());
-    const private_field bounds        = std::tuple("global_bounds", "std::vector<torch::Tensor>", std::optional<std::string>());
-    const private_field nrows         = std::tuple("global_nrows", "int", std::optional<std::string>());
-    const private_field classes       = std::tuple("global_classes", "int", std::optional<std::string>());
-    const private_field emb_size      = std::tuple("global_emb_size", "int", std::optional<std::string>());
-    const private_field ra            = std::tuple("global_ra", "int", std::optional<std::string>());
-    const private_field rb            = std::tuple("global_rb", "int", std::optional<std::string>());
-    const private_field is_directed   = std::tuple("global_is_directed", "bool", std::optional<std::string>());
-    const private_field segments      = std::tuple("global_segments", "std::vector<int>", std::optional<std::string>());
-
-    std::vector<private_field> privateFields{
-       offset_graph,
-       columns_graph,
-       value_graph,
-       bounds,
-       nrows,
-       classes,
-       emb_size,
-       ra,
-       rb,
-       is_directed,
-       segments
-    };
-
-    // name/type/init
-    FunctionBuilder transform{
-      FunctionBuilder("transform", {FunctionParameter("SM&", "adj0"), FunctionParameter("DB*", "train_mask")}, "void")
-    };
-    FunctionBuilder constructor{
-      FunctionBuilder("GALAGNN", {FunctionParameter("SM&", "adj0"), FunctionParameter("DB*", "train_mask")}, "")
-    };
-    FunctionBuilder forward{
-      FunctionBuilder("forward", {}, "std::vector<torch::Tensor>", 2)
-    };
-    FunctionBuilder invFunction{
-      FunctionBuilder("inv", {}, "void")
-    };
-
-    void writeClassDeclaration(std::ofstream &out)
+public:
+    class Field
     {
-        out << "struct GALAGNN : torch::nn::Module {" << std::endl;
-        out << std::endl;
-        for (auto f : privateFields)
-        {
-            out << "  ";
-            out << std::get<1>(f) << " " << std::get<0>(f);
-            auto i = std::get<2>(f);
-            if (i.has_value())
-            {
-                out << "{" << i.value() << "}";
-            }
-            out << ";" << std::endl;
-        }
-        out << std::endl;
-        constructor.writeFunction(out, true, "", 1);
-        transform.writePrototype(out, false, "", 1);
-        out << ";" << std::endl;
-        invFunction.writePrototype(out, false, "", 1);
-        out << ";" << std::endl;
-        forward.writePrototype(out, false, "", 1);
-        out << ";" << std::endl;
-        out << "};" << std::endl;
+    private:
+        std::string type;
+        std::string name;
+        std::optional<string> initializer;
+    public:
+      Field(std::string _type, std::string _name)
+          : type(_type), name(_name), initializer(std::optional<string>()) {}
+
+      Field(std::string _type, std::string _name, std::optional<string> _init)
+          : type(_type), name(_name), initializer(_init) {}
+
+      Field(std::string _type, std::string _name, std::string init)
+          : type(_type), name(_name), initializer(std::optional<string>(init)) {}
+
+      std::string const getType() { return type; }
+      std::string const getName() { return name; }
+      std::optional<string> const getInitializer() { return initializer; }
+    };
+    Class(std::string _name, std::string _base, std::vector<Field> _fields, bool _isStruct=false)
+        : name(_name), base(std::optional(_base)), fields(_fields), isStruct(_isStruct) {}
+
+    Class(std::string _name, std::vector<Field> _fields, bool _isStruct=false)
+        : name(_name), base(std::optional<std::string>()), fields(_fields), isStruct(_isStruct) {}
+
+    std::string addField(Field f)
+    {
+        fields.push_back(f);
+        return f.getName();
     }
-    
+
+    void writeClassDeclaration(std::ofstream &out) {
+        out << (isStruct ? "struct" : "class");
+        out << " " << name << " ";
+        if (base.has_value()) {
+            out << ": " << base.value() << " ";
+        }
+        out << "{" << std::endl;
+        for (auto f : fields) {
+              out << "  ";
+              out << f.getType() << " " << f.getName();
+              auto i = f.getInitializer();
+              if (i.has_value())
+              {
+                  out << "{" << i.value() << "}";
+              }
+              out << ";" << std::endl;
+          }
+          out << std::endl;
+          for (auto c : constructors) {
+              c->writeFunction(out, true, "", 1);
+          }
+          for (auto m : methods) {
+              m->writePrototype(out, false, "", 1);
+              out << ";" << std::endl;
+          }
+          out << "};" << std::endl;
+      }
+
+
+ protected:
+    bool isStruct;
+    std::string name;
+    std::optional<string> base;
+    // Assume all public
+    std::vector<FunctionBuilder*> methods;
+    std::vector<FunctionBuilder*> constructors;
+    std::vector<Field> fields;
+};
+
+class TorchModule : public Class
+{
+public:
+  FunctionBuilder transform{
+      FunctionBuilder("transform",
+                      {FunctionParameter("SM&", "adj0"),
+                       FunctionParameter("DB*", "train_mask")},
+                      "void")};
+  FunctionBuilder forward{
+      FunctionBuilder("forward", {}, "std::vector<torch::Tensor>", 2)};
+  FunctionBuilder invFunction{FunctionBuilder("inv", {}, "void")};
+  FunctionBuilder constructor{
+      FunctionBuilder("GALAGNN",
+                      {FunctionParameter("SM&", "adj0"),
+                       FunctionParameter("DB*", "train_mask")},
+                      "")};
+
+  TorchModule()
+      : Class("GALAGNN", "torch::nn::Module",
+              {Field("std::vector<torch::Tensor>", "global_offset_graph"),
+               Field("std::vector<torch::Tensor>", "global_columns_graph"),
+               Field("std::vector<torch::Tensor>", "global_value_graph"),
+               Field("std::vector<torch::Tensor>", "global_bounds"),
+               Field("int", "global_nrows"),
+               Field("int", "global_classes"),
+               Field("int", "global_emb_size"),
+               Field("int", "global_ra"),
+               Field("int", "global_rb"),
+               Field("bool", "global_is_directed"),
+               Field("std::vector<int>", "global_segments")}, true) {
+      methods.push_back(&transform);
+      methods.push_back(&forward);
+      methods.push_back(&invFunction);
+      constructors.push_back(&constructor);
+  }
 };
 
 // TODO break this down into multiple parts??
@@ -471,13 +510,7 @@ public:
 
     std::string addField(std::string name, std::string type, std::optional<std::string> init)
     {
-        this->galagnn.privateFields.push_back(std::tuple(name, type, init));
-        return name;
-    }
-
-    std::vector<std::tuple<std::string, std::string, std::optional<std::string>>> getFields()
-    {
-        return this->galagnn.privateFields;
+        return this->galagnn.addField(Class::Field(name, type, init));
     }
 
     // TODO this is at the code generation phase so you don't need to clear / remove stuff
@@ -1560,7 +1593,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 std::string inSize2 = "size" + std::to_string(fcCount + 1);
                 model.getConstructor()->addArgument("int", inSize2);
 
-                std::string fc = model.addField("fc" + std::to_string(fcCount), "torch::nn::Linear", std::optional("nullptr"));
+                std::string fc = model.addField("torch::nn::Linear", "fc" + std::to_string(fcCount), std::optional("nullptr"));
 
                 model.getConstructor()->getCode()->assign(
                     fc,
@@ -1595,7 +1628,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 std::string inSize2 = "size" + std::to_string(fcCount + 1);
                 model.getConstructor()->addArgument("int", inSize2);
 
-                auto fc = model.addField("fc" + std::to_string(fcCount), "torch::nn::Linear", std::optional("nullptr"));
+                auto fc = model.addField("torch::nn::Linear", "fc" + std::to_string(fcCount), std::optional("nullptr"));
                 model.getConstructor()->getCode()->assign(
                     fc,
                     Code::callFn(
@@ -1621,7 +1654,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
             model.getForwardCode()->addCode(forwardCall);
         } else if (cNode->getOp() == FFN_OP_EDGE)
         {
-            std::string efc = model.addField("efc" + std::to_string(fcEdgeCount), "torch::nn::Linear", std::optional(nullptr));
+            std::string efc = model.addField("torch::nn::Linear", "efc" + std::to_string(fcEdgeCount), std::optional(nullptr));
             model.getConstructor()->getCode()->assign(
                 efc,
                 Code::callFn("register_module",
@@ -1632,7 +1665,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
             fcEdgeCount++;
         }  else if (cNode->getOp() == FFN_OP_SELF)
         {
-            std::string sfc = model.addField("sfc" + std::to_string(fcSelfCount), "torch::nn::Linear", std::optional(nullptr));
+            std::string sfc = model.addField("torch::nn::Linear", "sfc" + std::to_string(fcSelfCount), std::optional(nullptr));
 
             if (fcSelfCount == 0)
             {
@@ -1652,7 +1685,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
             fcSelfCount++;
         } else if (cNode->getOp() == SCALAR_ADD_EPS_MULTIPLY_OP)
         {
-            auto eps = model.addField("eps" + std::to_string(epCount), "torch::Tensor", std::optional("nullptr"));
+            auto eps = model.addField("torch::Tensor", "eps" + std::to_string(epCount), std::optional("nullptr"));
             model.getConstructor()->getCode()->assign(
                 eps,
                 Code::callFn("register_parameter", { Code::str(eps), Code::callFn("torch::tensor", { Code::vec("(float)"+cNode->getParam(0))}) })
