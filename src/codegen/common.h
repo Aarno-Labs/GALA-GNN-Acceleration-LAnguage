@@ -1552,14 +1552,11 @@ forward(torch::Tensor t_iden";
   evaluator.begin();";
                 model.getPreCall()->addCode(eval);
 
-                std::string timingInitStr = " double start, end;\n\
-  double start_train, end_train;\n\
-  std::vector<double> times_arr, times_arr_train;\n";
                 if (GALAFEContext::print_accuracy)
                 {
-                    timingInitStr += "  float max_acc = 0;\n";
+                    std::string accInitStr = "  float max_acc = 0;\n";
+                    model.getPreCall()->addCode(accInitStr);
                 }
-                model.getPreCall()->addCode(timingInitStr);
 
                 std::string tempTrainLoopPreCall = " for (size_t epoch = 1; epoch <= num_iters; ++epoch) {\n\
     // Reset gradients.\n\
@@ -1567,7 +1564,6 @@ forward(torch::Tensor t_iden";
     // Execute the model on the input data.\n\
     cudaDeviceSynchronize();\n\
     evaluator.begin_forward();\n\
-    start = get_time();\n\
     torch::Tensor prediction =\n\
         net->forward(t_iden";
 
@@ -1575,10 +1571,8 @@ forward(torch::Tensor t_iden";
                 std::string tempTrainLoopPostCall = ", epoch, mod_v)[0];\n\
     cudaDeviceSynchronize();\n\
     evaluator.end_forward();\n\
-    end = get_time();\n\
     cudaDeviceSynchronize();\n\
     evaluator.begin_train();\n\
-    start_train = get_time();\n\
     torch::Tensor prediction_train = prediction.index({t_train_mask});\n\
     torch::Tensor labels_train = t_labs.index({t_train_mask});\n\
     auto criterion = torch::nn::CrossEntropyLoss();\n\
@@ -1587,7 +1581,6 @@ forward(torch::Tensor t_iden";
     optimizer.step();\n\
     cudaDeviceSynchronize();\n\
     evaluator.end_train();\n\
-    end_train = get_time();\n\
     net->eval();\n\
     " + generateEvaluatorTestCall() + "\n\
     net->train();\n";
@@ -1604,11 +1597,7 @@ forward(torch::Tensor t_iden";
     }\n";
                 }
 
-                tempTrainLoopPostCall += "    if (epoch >= skip_cache_warmup) {\n\
-      times_arr.push_back(end - start);\n\
-      times_arr_train.push_back(end_train - start_train);\n\
-    }\n\
-  }";
+                tempTrainLoopPostCall += "  }";
 
                 model.getPreCall()->addCode(tempTrainLoopPreCall);
                 model.getPostCall()->addCode(tempTrainLoopPostCall);
@@ -1620,23 +1609,16 @@ forward(torch::Tensor t_iden";
   evaluator.report();";
         postCode.addCode(evalEnd);
 
-        std::string printTimes;
         if (GALAFEContext::print_accuracy)
         {
-            printTimes = "  std::cout << calc_mean(times_arr) << \",\"\n\
-            << max_acc << std::endl;\n";
+            std::string printAcc = "  std::cout << max_acc << std::endl;\n";
+            postCode.addCode(printAcc);
         }
         else if (GALAFEContext::print_memory)
         {
-            printTimes = "  std::cout << printMemoryUsage() << \",\"\n\
-            << calc_mean(times_arr) + calc_mean(times_arr_train) << std::endl;\n";
+            std::string printMem = "  std::cout << printMemoryUsage() << std::endl;\n";
+            postCode.addCode(printMem);
         }
-        else
-        {
-            printTimes = "  std::cout << calc_mean(times_arr) << \",\"\n\
-            << calc_mean(times_arr) + calc_mean(times_arr_train) << std::endl;\n";
-        }
-        postCode.addCode(printTimes);
 
         std::string closeMain = "}";
         postCode.addCode(closeMain);

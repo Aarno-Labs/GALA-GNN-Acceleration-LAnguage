@@ -1,5 +1,5 @@
-//
-//
+#ifndef __TEST_COMMON
+#define __TEST_COMMON
 #include "../src/utils/mtx_io.h"
 #include "../src/utils/threading_utils.h"
 
@@ -697,3 +697,4 @@ double calc_mean(std::vector<double> &vec) {
 //    }
 //    return edges;
 //}
+#endif
