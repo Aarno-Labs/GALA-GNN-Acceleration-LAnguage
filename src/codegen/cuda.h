@@ -11,7 +11,7 @@
 class CUDAGenerator : public CodeGenerator
 {
 public:
-    CUDAGenerator(GALAContext* context, std::string& outputPath) : CodeGenerator(context, outputPath)
+    CUDAGenerator(GALAContext* context, filesystem::path& outputPath) : CodeGenerator(context, outputPath)
     {
     }
 

@@ -216,6 +216,8 @@ endif ()
 ######################### Compiler Setup ###########################
 message("Using compiler: ${CMAKE_CXX_COMPILER_ID}")
 
+find_package(Boost COMPONENTS program_options REQUIRED)
+
 # OpenMP
 find_package(OpenMP)
 if (OPENMP_FOUND)

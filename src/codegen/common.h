@@ -9,6 +9,7 @@
 #include <map>
 #include "../ir/compute.h"
 #include "../frontend/context.h"
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 
@@ -277,7 +278,7 @@ protected:
     std::ofstream outStreamCMake;
 
 public:
-    CodeGenerator(GALAContext* context, std::string& outputPath)
+    CodeGenerator(GALAContext* context, filesystem::path& outputPath)
     {
         this->context = context;
         this->openStream(outputPath);
@@ -526,12 +527,13 @@ nvals0 = adj0.nvals();\n";
                 }
             }
 
+            filesystem::path data_path = GALAFEContext::data_root / cNode->getParam(0);
             // This doesn't need to change
             std::string fileLoadCode;
             if (GALAFEContext::use_long)
             {
                 fileLoadCode = "    SM adj0;\n\
-    std::string filename = \"../../Data/" + cNode->getParam(0) +  "/\";\n\
+    std::string filename = \"" + std::string(data_path) + "/\";\n\
     readSM_npy32<SM>(filename, &adj0);\n\
 \n\
     // Adj info\n\
@@ -573,7 +575,7 @@ nvals0 = adj0.nvals();\n";
             } else
             {
                 fileLoadCode = "    SM adj0;\n\
-    std::string filename = \"../../Data/" + cNode->getParam(0) +  "/\";\n\
+    std::string filename = \"" + std::string(data_path) + "/\";\n\
     readSM_npy32<SM>(filename, &adj0);\n\
 \n\
     // Adj info\n\
@@ -1596,12 +1598,12 @@ forward(torch::Tensor t_iden";
     }
 
     // Handle the stream to write to
-    void openStream(std::string& outputPath)
+    void openStream(filesystem::path& outputPath)
     {
-        std::string cmakePath = outputPath + "CMakeLists.txt";
+        std::string cmakePath = outputPath / "CMakeLists.txt";
         this->outStreamCMake = std::ofstream(cmakePath);
 
-        std::string modelPath = outputPath + "gala.cu";
+        std::string modelPath = outputPath / "gala.cu";
         this->outStreamModel = std::ofstream(modelPath);
     }
 

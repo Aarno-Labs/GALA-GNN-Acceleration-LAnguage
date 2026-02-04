@@ -13,6 +13,7 @@
 #include <map>
 #include <string>
 #include <iostream>
+#include <filesystem>
 
 
 class GALAFEContext {
@@ -21,6 +22,8 @@ class GALAFEContext {
         static std::vector<RelationEdge*> dependencies;
         static std::vector<RelationEdge*> associations;
         static std::vector<TransformEdge*> transforms;
+
+        static filesystem::path data_root;
 
 		static bool operator_reordering;
 		static bool sparse_rewrites;
