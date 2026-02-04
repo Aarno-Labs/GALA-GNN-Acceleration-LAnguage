@@ -32,6 +32,7 @@ class GALAFEContext {
 		static bool print_memory;
 		static bool print_accuracy;
 		static bool use_long;
+        static bool instrument_evluator;
 
 		static std::string opt_input;
 };

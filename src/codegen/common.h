@@ -163,18 +163,29 @@ private:
     Code modelForwardCallPre;
     Code modelForwardCallInternal;
     Code modelForwardCallPost;
+    uint forwardTensorArguments;
 
 
 public:
-    Model()
+    Model() : forwardTensorArguments(0)
     {
         std::string defaultName = "gnn";
         this->modelName = defaultName;
     }
 
-    Model(std::string& name)
+    Model(std::string& name): forwardTensorArguments(0)
     {
         this->modelName = name;
+    }
+
+    void incForwardTensorArgs()
+    {
+        forwardTensorArguments++;
+    }
+
+    uint numForwardTensorArgs()
+    {
+        return forwardTensorArguments;
     }
 
     // TODO this is at the code generation phase so you don't need to clear / remove stuff
@@ -906,6 +917,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                         std::string aggrResStr = ", t_iden_n";
                         model.getCall()->addCode(aggrResStr);
                         std::string aggrResForward = ", torch::Tensor t_iden_n";
+                        model.incForwardTensorArgs();
                         model.getForwardCallInternal()->addCode(aggrResForward);
                     } else
                     {
@@ -989,6 +1001,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                         std::string aggrResStr = ", t_iden_n";
                         model.getCall()->addCode(aggrResStr);
                         std::string aggrResForward = ", torch::Tensor t_iden_n";
+                        model.incForwardTensorArgs();
                         model.getForwardCallInternal()->addCode(aggrResForward);
                     } else
                     {
@@ -1142,6 +1155,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 model.getCall()->addCode(tempPassDegree);
 
                 std::string tempPassDegreeForward = ", torch::Tensor " + cNode->getOutput(0)->getName();
+                model.incForwardTensorArgs();
                 model.getForwardCallInternal()->addCode(tempPassDegreeForward);
             } else
             {
@@ -1416,6 +1430,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 std::string tempFowradCallPre = "std::vector<torch::Tensor>\n\
 forward(torch::Tensor t_iden";
                 model.getForwardCallPre()->addCode(tempFowradCallPre);
+                model.incForwardTensorArgs();
                 std::string tempFowradCallPost = ", int ep, int mod_v){\n";
                 model.getForwardCallPost()->addCode(tempFowradCallPost);
 
@@ -1495,6 +1510,10 @@ forward(torch::Tensor t_iden";
 
                 std::string skipEpochsStr = " int skip_cache_warmup = 5;\n";
                 model.getPreCall()->addCode(skipEpochsStr);
+
+                std::string eval = "Evaluator<GALAGNN> evaluator(skip_cache_warmup);\n\
+  evaluator.begin()";
+                model.getPreCall()->addCode(eval);
 
                 std::string timingInitStr = " double start, end;\n\
   double start_train, end_train;\n\
