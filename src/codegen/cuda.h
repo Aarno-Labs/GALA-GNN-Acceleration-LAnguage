@@ -972,7 +972,8 @@ torch::Tensor bounds, int nrows, int segments) {\n\
             "#include \"../src/ops/aggregators.h\"\n"
             "#include \"../src/ops/tiling.h\"\n"
             "#include \"../src/utils/mtx_io.h\"\n"
-            "#include \"../tests/common.h\"\n";
+            "#include \"../tests/common.h\"\n"
+            "#include \"../src/codegen/evaluator.h\"\n";
         importCode.addCode(importBase);
 
 
