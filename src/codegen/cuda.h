@@ -22,6 +22,11 @@ public:
             "set(CMAKE_CXX_COMPILER icpx)\n"
             "find_package(Torch REQUIRED)\n"
             "find_package(OpenMP)\n"
+            "if (NOT DEFINED GALA)\n"
+            "  set(GALA \"${PROJECT_SOURCE_DIR}/..\")\n"
+            "endif()\n"
+            "message(\"GALA Sources at ${GALA}\")\n"
+            "include_directories(\"${GALA}/include\")\n"
             "if (OPENMP_FOUND)\n"
             "    set(OpenMP_CXX_FLAGS \"-fopenmp\")\n"
             "    set(CMAKE_CXX_FLAGS \"${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}\")\n"
@@ -967,13 +972,13 @@ torch::Tensor bounds, int nrows, int segments) {\n\
             "#include <omp.h>\n"
             "#include <stdlib.h>\n"
             "#include <torch/torch.h>\n"
-            "#include \"../src/formats/csrc_matrix.h\"\n"
-            "#include \"../src/formats/dense_matrix.h\"\n"
-            "#include \"../src/ops/aggregators.h\"\n"
-            "#include \"../src/ops/tiling.h\"\n"
-            "#include \"../src/utils/mtx_io.h\"\n"
-            "#include \"../tests/common.h\"\n"
-            "#include \"../src/codegen/evaluator.h\"\n";
+            "#include <formats/csrc_matrix.h>\n"
+            "#include <formats/dense_matrix.h>\n"
+            "#include <ops/aggregators.h>\n"
+            "#include <ops/tiling.h>\n"
+            "#include <utils/mtx_io.h>\n"
+            "#include <tests/common.h>\n"
+            "#include <codegen/evaluator.h>\n";
         importCode.addCode(importBase);
 
 

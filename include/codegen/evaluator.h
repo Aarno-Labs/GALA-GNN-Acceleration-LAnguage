@@ -1,13 +1,13 @@
 #ifndef TESTER_H_
 #define TESTER_H_
 
-#include "../utils/threading_utils.h"
+#include "../../src/utils/threading_utils.h"
 #include <iostream>
 #include <torch/torch.h>
 #include <vector>
 #include <iterator>
 #include <algorithm>
-#include "../../tests/common.h"
+#include <tests/common.h>
 
 template <typename M> class Evaluator {
 private:
