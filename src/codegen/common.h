@@ -1470,6 +1470,8 @@ forward(torch::Tensor t_iden";
                 model.addForwardTensorArgName("t_iden");
                 std::string tempFowradCallPost = ", int ep, int mod_v){\n";
                 model.getForwardCallPost()->addCode(tempFowradCallPost);
+                std::string iden_n_init = "torch::Tensor t_iden_n = t_iden;\n";
+                model.getForward()->addCode(iden_n_init);
 
                 std::unordered_set<std::string> encounteredTensors;
                 // std::string resInit = "torch::Tensor res = input_dense;";
