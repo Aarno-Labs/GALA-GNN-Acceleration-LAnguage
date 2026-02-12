@@ -1588,7 +1588,7 @@ forward(torch::Tensor t_iden";
     evaluator.end_train();\n\
     net->eval();\n\
     " + generateEvaluatorTestCall() + "\n\
-        evaluator.train_step_report(epoch, mod_v, d_loss, train_acc, test_acc, val_acc);\n\
+        evaluator.train_step_report(epoch, " + std::to_string(GALAFEContext::log_interval) + ", d_loss, train_acc, test_acc, val_acc);\n\
     net->train();\n";
 
                 if (GALAFEContext::print_accuracy)

@@ -61,6 +61,7 @@ bool GALAFEContext::use_long;
 filesystem::path GALAFEContext::data_root;
 
 std::string GALAFEContext::opt_input = "";
+int GALAFEContext::log_interval;
 
 //Dense matrix with double values.
 typedef DenseMatrix<ind1_t, ind2_t, val_t> DMd_t;
@@ -81,6 +82,7 @@ int main(int argc, char **argv) {
         bool_opt("print_accuracy", false)
         bool_opt("print_memory", false)
         bool_opt("use_long", false)
+        ("log_interval", po::value<int>()->default_value(10), "log_interval")
         ("opt-input", po::value<std::string>()->default_value(""), "optional input")
         ("data-root", po::value<std::string>(), "data root")
         ("script", po::value<std::string>(), "script")
@@ -93,6 +95,7 @@ int main(int argc, char **argv) {
     po::notify(vm);
 
     GALAFEContext::opt_input = vm["opt-input"].as<std::string>();
+    GALAFEContext::log_interval = vm["log_interval"].as<int>();
     GALAFEContext::operator_reordering = vm["operator_reordering"].as<bool>();
     GALAFEContext::sparse_rewrites = vm["sparse_rewrites"].as<bool>();
     GALAFEContext::train_code_motion = vm["train_code_motion"].as<bool>();

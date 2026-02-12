@@ -35,6 +35,7 @@ class GALAFEContext {
         static bool instrument_evluator;
 
 		static std::string opt_input;
+		static int log_interval;
 };
 
 #endif //CONTEXT_H
