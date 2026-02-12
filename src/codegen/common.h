@@ -1530,7 +1530,7 @@ forward(torch::Tensor t_iden";
                 if (loopNode->getOptimizer() == ADAM)
                 {
                     std::string optmCode = "torch::optim::Adam optimizer(\n\
-    net->parameters(), torch::optim::AdamOptions(" + std::to_string(loopNode->getLearningRate()) +").weight_decay(" + std::to_string(GALAFEContext::weight_decay) + "));\n";
+    net->parameters(), torch::optim::AdamOptions(" + std::to_string(loopNode->getLearningRate()) +").weight_decay(" + std::to_string(loopNode->getWeightDecay()) + "));\n";
                     model.getPreCall()->addCode(optmCode);
                 } else
                 {

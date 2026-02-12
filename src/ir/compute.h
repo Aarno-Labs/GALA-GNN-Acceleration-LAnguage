@@ -177,6 +177,7 @@ private:
     int stepValid;
     int stepTest;
     float learningRate;
+    float weightDecay;
     LossFunction lossFunc;
     NNOptimizer optimizer;
     // The steps in the program validation happens. If not specified the numIter.
@@ -184,19 +185,21 @@ private:
     //  temp solution - Remove everything and then add everything back
     std::vector<ForwardNode *> loop;
 public:
-    TrainingLoopNode(int numIter, LossFunction lossFunc = CROSS_ENTROPY, NNOptimizer optimizer = ADAM, int stepValid = 0, int stepTest = 1, float learningRate = 0.01){
+    TrainingLoopNode(int numIter, LossFunction lossFunc = CROSS_ENTROPY, NNOptimizer optimizer = ADAM, int stepValid = 0, int stepTest = 1, float learningRate = 0.01, float weightDecay = 5e-4){
         this->numIter = numIter;
         this->lossFunc = lossFunc;
         this->optimizer = optimizer;
         this->stepValid = stepValid;
         this->stepTest = stepTest;
         this->learningRate = learningRate;
+        this->weightDecay = weightDecay;
     }
 
     int getIter() { return this->numIter; }
     int getValidStep() { return this->stepValid; }
     int getTestStep() { return this->stepTest; }
     float getLearningRate() { return this->learningRate; }
+    float getWeightDecay() { return this->weightDecay; }
     LossFunction getLossFunc() { return this->lossFunc; }
     NNOptimizer getOptimizer() { return this->optimizer; }
 

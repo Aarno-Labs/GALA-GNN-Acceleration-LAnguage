@@ -50,6 +50,8 @@ class ModelConfig {
         vector<int> output_input_classes; // output of first layer fed into second layer
         int num_layers;
         int validation_step;
+        float weight_decay;
+        float learning_rate;
         float normalization_value;
         vector<LayerOpType> layer_operations;
         vector<bool> nonln_present;
@@ -70,6 +72,8 @@ class ModelConfig {
             dataset_name = "\0";
             iterations = 0;
             num_layers = 0;
+            weight_decay = 5e-4;
+            learning_rate = 0.01;
             normalization_value = -1;
             output_input_classes.clear();
             layer_operations.clear();

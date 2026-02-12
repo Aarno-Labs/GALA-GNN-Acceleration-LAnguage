@@ -61,8 +61,6 @@ bool GALAFEContext::use_long;
 filesystem::path GALAFEContext::data_root;
 
 std::string GALAFEContext::opt_input = "";
-float GALAFEContext::weight_decay;
-float GALAFEContext::learning_rate;
 
 //Dense matrix with double values.
 typedef DenseMatrix<ind1_t, ind2_t, val_t> DMd_t;
@@ -83,8 +81,6 @@ int main(int argc, char **argv) {
         bool_opt("print_accuracy", false)
         bool_opt("print_memory", false)
         bool_opt("use_long", false)
-        ("weight_decay", po::value<float>()->default_value(5e-4), "weight_decay")
-        ("learning_rate", po::value<float>()->default_value(0.01), "learning_rate")
         ("opt-input", po::value<std::string>()->default_value(""), "optional input")
         ("data-root", po::value<std::string>(), "data root")
         ("script", po::value<std::string>(), "script")
@@ -97,8 +93,6 @@ int main(int argc, char **argv) {
     po::notify(vm);
 
     GALAFEContext::opt_input = vm["opt-input"].as<std::string>();
-    GALAFEContext::weight_decay = vm["weight_decay"].as<float>();
-    GALAFEContext::learning_rate = vm["learning_rate"].as<float>();
     GALAFEContext::operator_reordering = vm["operator_reordering"].as<bool>();
     GALAFEContext::sparse_rewrites = vm["sparse_rewrites"].as<bool>();
     GALAFEContext::train_code_motion = vm["train_code_motion"].as<bool>();
