@@ -417,7 +417,7 @@ public:
             result += argNames[i];
         }
         // Add the remaining fixed arguments
-        result += ", epoch, mod_v, t_labs, t_train_mask, t_test_mask, t_valid_mask);";
+        result += ", epoch, mod_v, t_labs, t_train_mask, t_test_mask, t_valid_mask, train_acc, test_acc, val_acc);";
         return result;
     }
 
@@ -1550,6 +1550,9 @@ forward(torch::Tensor t_iden";
                 std::string skipEpochsStr = " int skip_cache_warmup = 5;\n";
                 model.getPreCall()->addCode(skipEpochsStr);
 
+                std::string accVarsStr = " float train_acc, test_acc, val_acc;\n";
+                model.getPreCall()->addCode(accVarsStr);
+
                 std::string eval = "Evaluator<GALAGNN> evaluator(skip_cache_warmup);\n\
   evaluator.begin();";
                 model.getPreCall()->addCode(eval);
@@ -1585,6 +1588,7 @@ forward(torch::Tensor t_iden";
     evaluator.end_train();\n\
     net->eval();\n\
     " + generateEvaluatorTestCall() + "\n\
+        evaluator.train_step_report(epoch, mod_v, d_loss, train_acc, test_acc, val_acc);\n\
     net->train();\n";
 
                 if (GALAFEContext::print_accuracy)

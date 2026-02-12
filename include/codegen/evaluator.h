@@ -32,8 +32,8 @@ public:
   template <typename... Args>
   void test(M *m, std::vector<torch::Tensor> (M::*forward)(Args..., int, int),
             Args... args, int ep, int mod, torch::Tensor &label,
-            torch::Tensor &train, torch::Tensor &test,
-            torch::Tensor &validate) {
+            torch::Tensor &train, torch::Tensor &test, torch::Tensor &validate,
+            float &train_acc, float &test_acc, float &val_acc) {
     auto out = (*m.*forward)(args..., ep, mod)[0];
     auto pred = out.argmax(1);
 
@@ -41,14 +41,23 @@ public:
     auto test_correct = pred.index({test}).eq(label.index({test}));
     auto validate_correct = pred.index({validate}).eq(label.index({validate}));
 
-    auto train_acc = train_correct.sum() / train.sum();
-    auto test_acc = (test_correct.sum() / test.sum()).item().toFloat();
-    auto val_acc = (validate_correct.sum() / validate.sum()).item().toFloat();
+    train_acc = (train_correct.sum() / train.sum()).item().toFloat();
+    test_acc = (test_correct.sum() / test.sum()).item().toFloat();
+    val_acc = (validate_correct.sum() / validate.sum()).item().toFloat();
+  }
+  void train_step_report(int epoch, int mod,
+                         torch::Tensor d_loss, float &train_acc, float &test_acc, float &val_acc) {
 
     if (best_val_acc < val_acc) {
       best_val_acc = val_acc;
       best_test_acc = test_acc;
     }
+
+    if (epoch % mod == 0) {
+       std::cout << "Epoch: " << epoch << ", " << "Loss: " << d_loss.item().toFloat() << std::endl;
+       std::cout << "Train: " << train_acc << ", " << "Val:" << val_acc << ", " << "Test: " << test_acc << std::endl;
+    }
+
   }
 
   void report() {
