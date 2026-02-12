@@ -36,6 +36,7 @@ class GALAFEContext {
 
 		static std::string opt_input;
 		static float weight_decay;
+		static float learning_rate;
 };
 
 #endif //CONTEXT_H

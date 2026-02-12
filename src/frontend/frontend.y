@@ -1097,7 +1097,7 @@ void generate_ir(){
     DataInfo* featInfo = dynamic_cast<DataInfo*>(featData->getData()->next());
     featInfo->setDims(-1, m1.graph_transformations[FEAT_SIZE]);
     
-    TrainingLoopNode* trainingLoop = new TrainingLoopNode(m1.iterations, CROSS_ENTROPY, ADAM, m1.validation_step);
+    TrainingLoopNode* trainingLoop = new TrainingLoopNode(m1.iterations, CROSS_ENTROPY, ADAM, m1.validation_step, 1, GALAFEContext::learning_rate);
     DataNode* connectNode = featData;
     for (int i = 0; i < m1.num_layers; i++){
         connectNode = addLayer(i, connectNode, graph, featData, trainingLoop); 
