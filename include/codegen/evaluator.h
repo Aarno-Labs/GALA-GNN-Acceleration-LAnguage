@@ -14,6 +14,7 @@ private:
   uint skip;
   float best_val_acc;
   float best_test_acc;
+  double begin_time, end_time;
   std::vector<double> forward_timing_starts;
   std::vector<double> forward_timing_ends;
   std::vector<double> train_timing_starts;
@@ -22,8 +23,8 @@ private:
 public:
   Evaluator(int skip_cache_warmup) : skip(skip_cache_warmup) {}
 
-  void begin() {}
-  void end() {}
+  void begin() { begin_time = get_time(); }
+  void end() { end_time = get_time();}
   void begin_forward() { forward_timing_starts.push_back(get_time()); }
   void end_forward() { forward_timing_ends.push_back(get_time()); }
   void begin_train() { train_timing_starts.push_back(get_time()); }
@@ -68,6 +69,7 @@ public:
     std::vector<double> out;
     std::transform(fs, forward_timing_starts.end(), fe, std::back_inserter(out),
                    [](const auto &s, const auto &e) { return e - s; });
+    std::cout << "Training completed in: " << (end_time - begin_time) << " seconds." << std::endl;
     std::cout << "Best validation accuracy: " << best_val_acc << std::endl;
     std::cout << "Test accuracy at best validation: " << best_test_acc
               << std::endl;
