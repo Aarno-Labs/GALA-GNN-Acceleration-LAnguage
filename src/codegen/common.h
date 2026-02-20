@@ -172,11 +172,13 @@ public:
     {
         std::string defaultName = "gnn";
         this->modelName = defaultName;
+        forwardTensorArgNames.push_back("t_iden");
     }
 
     Model(std::string& name): forwardTensorArguments(0)
     {
         this->modelName = name;
+        forwardTensorArgNames.push_back("t_iden");
     }
 
     void incForwardTensorArgs()
@@ -1467,11 +1469,10 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
 forward(torch::Tensor t_iden";
                 model.getForwardCallPre()->addCode(tempFowradCallPre);
                 model.incForwardTensorArgs();
-                model.addForwardTensorArgName("t_iden");
                 std::string tempFowradCallPost = ", int ep, int mod_v){\n";
                 model.getForwardCallPost()->addCode(tempFowradCallPost);
-                std::string iden_n_init = "torch::Tensor t_iden_n = t_iden;\n";
-                model.getForward()->addCode(iden_n_init);
+                // std::string iden_n_init = "torch::Tensor t_iden_n = t_iden;\n";
+                // model.getForward()->addCode(iden_n_init);
 
                 std::unordered_set<std::string> encounteredTensors;
                 // std::string resInit = "torch::Tensor res = input_dense;";
