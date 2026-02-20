@@ -225,6 +225,16 @@ int main(int argc, char **argv) {
 		GALATransformations::sparsityAwareRewrites(GALAFEContext::program, GALAFEContext::dependencies,
 		GALAFEContext::associations, GALAFEContext::transforms);
 	}
+	if (GALAFEContext::train_code_motion)
+	{
+		GALATransformations::trainingInvariantCodeMotion(GALAFEContext::program, GALAFEContext::dependencies,
+			GALAFEContext::associations, GALAFEContext::transforms);
+	}
+	if (GALAFEContext::training_subgraph)
+	{
+		GALATransformations::trainingSubGraph(GALAFEContext::program, GALAFEContext::dependencies,
+			GALAFEContext::associations, GALAFEContext::transforms);
+	}
 	genCode.writeCode(GALAFEContext::program, GALAFEContext::dependencies,
 		GALAFEContext::associations, GALAFEContext::transforms);
 
