@@ -9,6 +9,7 @@
 #include <map>
 #include "../ir/compute.h"
 #include "../frontend/context.h"
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 
@@ -162,18 +163,42 @@ private:
     Code modelForwardCallPre;
     Code modelForwardCallInternal;
     Code modelForwardCallPost;
+    uint forwardTensorArguments;
+    std::vector<std::string> forwardTensorArgNames;
 
 
 public:
-    Model()
+    Model() : forwardTensorArguments(0)
     {
         std::string defaultName = "gnn";
         this->modelName = defaultName;
+        forwardTensorArgNames.push_back("t_iden");
     }
 
-    Model(std::string& name)
+    Model(std::string& name): forwardTensorArguments(0)
     {
         this->modelName = name;
+        forwardTensorArgNames.push_back("t_iden");
+    }
+
+    void incForwardTensorArgs()
+    {
+        forwardTensorArguments++;
+    }
+
+    uint numForwardTensorArgs()
+    {
+        return forwardTensorArguments;
+    }
+
+    void addForwardTensorArgName(const std::string& name)
+    {
+        forwardTensorArgNames.push_back(name);
+    }
+
+    const std::vector<std::string>& getForwardTensorArgNames() const
+    {
+        return forwardTensorArgNames;
     }
 
     // TODO this is at the code generation phase so you don't need to clear / remove stuff
@@ -277,7 +302,7 @@ protected:
     std::ofstream outStreamCMake;
 
 public:
-    CodeGenerator(GALAContext* context, std::string& outputPath)
+    CodeGenerator(GALAContext* context, filesystem::path& outputPath)
     {
         this->context = context;
         this->openStream(outputPath);
@@ -374,6 +399,28 @@ public:
             }
         }
         return kernelName;
+    }
+
+    std::string generateEvaluatorTestCall()
+    {
+        std::string result = "    evaluator.test<";
+        // Generate template arguments (torch::Tensor for each tensor arg)
+        auto& argNames = model.getForwardTensorArgNames();
+        for (size_t i = 0; i < argNames.size(); ++i)
+        {
+            if (i > 0) result += ", ";
+            result += "torch::Tensor";
+        }
+        result += ">(net.get(), &GALAGNN::forward, ";
+        // Generate actual arguments (the tensor arg names)
+        for (size_t i = 0; i < argNames.size(); ++i)
+        {
+            if (i > 0) result += ", ";
+            result += argNames[i];
+        }
+        // Add the remaining fixed arguments
+        result += ", epoch, mod_v, t_labs, t_train_mask, t_test_mask, t_valid_mask, train_acc, test_acc, val_acc);";
+        return result;
     }
 
     std::string generateOutputString(ComputeNode* cNode, bool outOfLoop)
@@ -526,12 +573,13 @@ nvals0 = adj0.nvals();\n";
                 }
             }
 
+            filesystem::path data_path = GALAFEContext::data_root / cNode->getParam(0);
             // This doesn't need to change
             std::string fileLoadCode;
             if (GALAFEContext::use_long)
             {
                 fileLoadCode = "    SM adj0;\n\
-    std::string filename = \"../../Data/" + cNode->getParam(0) +  "/\";\n\
+    std::string filename = \"" + std::string(data_path) + "/\";\n\
     readSM_npy32<SM>(filename, &adj0);\n\
 \n\
     // Adj info\n\
@@ -573,7 +621,7 @@ nvals0 = adj0.nvals();\n";
             } else
             {
                 fileLoadCode = "    SM adj0;\n\
-    std::string filename = \"../../Data/" + cNode->getParam(0) +  "/\";\n\
+    std::string filename = \"" + std::string(data_path) + "/\";\n\
     readSM_npy32<SM>(filename, &adj0);\n\
 \n\
     // Adj info\n\
@@ -904,6 +952,8 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                         std::string aggrResStr = ", t_iden_n";
                         model.getCall()->addCode(aggrResStr);
                         std::string aggrResForward = ", torch::Tensor t_iden_n";
+                        model.incForwardTensorArgs();
+                        model.addForwardTensorArgName("t_iden_n");
                         model.getForwardCallInternal()->addCode(aggrResForward);
                     } else
                     {
@@ -987,6 +1037,8 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                         std::string aggrResStr = ", t_iden_n";
                         model.getCall()->addCode(aggrResStr);
                         std::string aggrResForward = ", torch::Tensor t_iden_n";
+                        model.incForwardTensorArgs();
+                        model.addForwardTensorArgName("t_iden_n");
                         model.getForwardCallInternal()->addCode(aggrResForward);
                     } else
                     {
@@ -1140,6 +1192,8 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 model.getCall()->addCode(tempPassDegree);
 
                 std::string tempPassDegreeForward = ", torch::Tensor " + cNode->getOutput(0)->getName();
+                model.incForwardTensorArgs();
+                model.addForwardTensorArgName(cNode->getOutput(0)->getName());
                 model.getForwardCallInternal()->addCode(tempPassDegreeForward);
             } else
             {
@@ -1414,8 +1468,11 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 std::string tempFowradCallPre = "std::vector<torch::Tensor>\n\
 forward(torch::Tensor t_iden";
                 model.getForwardCallPre()->addCode(tempFowradCallPre);
+                model.incForwardTensorArgs();
                 std::string tempFowradCallPost = ", int ep, int mod_v){\n";
                 model.getForwardCallPost()->addCode(tempFowradCallPost);
+                // std::string iden_n_init = "torch::Tensor t_iden_n = t_iden;\n";
+                // model.getForward()->addCode(iden_n_init);
 
                 std::unordered_set<std::string> encounteredTensors;
                 // std::string resInit = "torch::Tensor res = input_dense;";
@@ -1474,7 +1531,7 @@ forward(torch::Tensor t_iden";
                 if (loopNode->getOptimizer() == ADAM)
                 {
                     std::string optmCode = "torch::optim::Adam optimizer(\n\
-    net->parameters(), torch::optim::AdamOptions(" + std::to_string(loopNode->getLearningRate()) +").weight_decay(5e-4));\n";
+    net->parameters(), torch::optim::AdamOptions(" + std::to_string(loopNode->getLearningRate()) +").weight_decay(" + std::to_string(loopNode->getWeightDecay()) + "));\n";
                     model.getPreCall()->addCode(optmCode);
                 } else
                 {
@@ -1494,32 +1551,34 @@ forward(torch::Tensor t_iden";
                 std::string skipEpochsStr = " int skip_cache_warmup = 5;\n";
                 model.getPreCall()->addCode(skipEpochsStr);
 
-                std::string timingInitStr = " double start, end;\n\
-  double start_train, end_train;\n\
-  std::vector<double> times_arr, times_arr_train;\n";
+                std::string accVarsStr = " float train_acc, test_acc, val_acc;\n";
+                model.getPreCall()->addCode(accVarsStr);
+
+                std::string eval = "Evaluator<GALAGNN> evaluator(skip_cache_warmup);\n\
+  evaluator.begin();";
+                model.getPreCall()->addCode(eval);
+
                 if (GALAFEContext::print_accuracy)
                 {
-                    timingInitStr += "  float max_acc = 0;\n";
+                    std::string accInitStr = "  float max_acc = 0;\n";
+                    model.getPreCall()->addCode(accInitStr);
                 }
-                model.getPreCall()->addCode(timingInitStr);
 
                 std::string tempTrainLoopPreCall = " for (size_t epoch = 1; epoch <= num_iters; ++epoch) {\n\
     // Reset gradients.\n\
     optimizer.zero_grad();\n\
     // Execute the model on the input data.\n\
     cudaDeviceSynchronize();\n\
-    start = get_time();\n\
+    evaluator.begin_forward();\n\
     torch::Tensor prediction =\n\
         net->forward(t_iden";
 
-                std::string tempTrainLoopPostCall;
-                if (GALAFEContext::print_accuracy)
-                {
-                    tempTrainLoopPostCall = ", epoch, mod_v)[0];\n\
+                // Build tempTrainLoopPostCall - shared parts
+                std::string tempTrainLoopPostCall = ", epoch, mod_v)[0];\n\
     cudaDeviceSynchronize();\n\
-    end = get_time();\n\
+    evaluator.end_forward();\n\
     cudaDeviceSynchronize();\n\
-    start_train = get_time();\n\
+    evaluator.begin_train();\n\
     torch::Tensor prediction_train = prediction.index({t_train_mask});\n\
     torch::Tensor labels_train = t_labs.index({t_train_mask});\n\
     auto criterion = torch::nn::CrossEntropyLoss();\n\
@@ -1527,64 +1586,46 @@ forward(torch::Tensor t_iden";
     d_loss.backward();\n\
     optimizer.step();\n\
     cudaDeviceSynchronize();\n\
-    end_train = get_time();\n\
-    torch::Tensor prediction_test = prediction.index({t_test_mask});\n\
+    evaluator.end_train();\n\
+    net->eval();\n\
+    " + generateEvaluatorTestCall() + "\n\
+        evaluator.train_step_report(epoch, " + std::to_string(GALAFEContext::log_interval) + ", d_loss, train_acc, test_acc, val_acc);\n\
+    net->train();\n";
+
+                if (GALAFEContext::print_accuracy)
+                {
+                    tempTrainLoopPostCall += "    torch::Tensor prediction_test = prediction.index({t_test_mask});\n\
     torch::Tensor labels_test = t_labs.index({t_test_mask});\n\
     auto [pred_val, pred_idx] = torch::max({prediction_test}, 1);\n\
     auto correct = torch::sum(pred_idx == labels_test);\n\
     float acc = (correct.item<val_t>() * 100.0 / labels_test.sizes()[0]);\n\
     if (max_acc<acc){\n\
         max_acc = acc;\n\
-    }\n\
-    if (epoch >= skip_cache_warmup) {\n\
-      times_arr.push_back(end - start);\n\
-      times_arr_train.push_back(end_train - start_train);\n\
-    }\n\
-  }";
-                } else
-                {
-                    tempTrainLoopPostCall = ", epoch, mod_v)[0];\n\
-    cudaDeviceSynchronize();\n\
-    end = get_time();\n\
-    cudaDeviceSynchronize();\n\
-    start_train = get_time();\n\
-    torch::Tensor prediction_train = prediction.index({t_train_mask});\n\
-    torch::Tensor labels_train = t_labs.index({t_train_mask});\n\
-    auto criterion = torch::nn::CrossEntropyLoss();\n\
-    torch::Tensor d_loss = criterion(prediction_train, labels_train);\n\
-    d_loss.backward();\n\
-    optimizer.step();\n\
-    cudaDeviceSynchronize();\n\
-    end_train = get_time();\n\
-    if (epoch >= skip_cache_warmup) {\n\
-      times_arr.push_back(end - start);\n\
-      times_arr_train.push_back(end_train - start_train);\n\
-    }\n\
-  }";
+    }\n";
                 }
+
+                tempTrainLoopPostCall += "  }";
 
                 model.getPreCall()->addCode(tempTrainLoopPreCall);
                 model.getPostCall()->addCode(tempTrainLoopPostCall);
             }
         }
 
-        std::string printTimes;
+        // Add evaluator end and report after the training loop
+        std::string evalEnd = "  evaluator.end();\n\
+  evaluator.report();";
+        postCode.addCode(evalEnd);
+
         if (GALAFEContext::print_accuracy)
         {
-            printTimes = "  std::cout << calc_mean(times_arr) << \",\"\n\
-            << max_acc << std::endl;\n";
+            std::string printAcc = "  std::cout << max_acc << std::endl;\n";
+            postCode.addCode(printAcc);
         }
         else if (GALAFEContext::print_memory)
         {
-            printTimes = "  std::cout << printMemoryUsage() << \",\"\n\
-            << calc_mean(times_arr) + calc_mean(times_arr_train) << std::endl;\n";
+            std::string printMem = "  std::cout << printMemoryUsage() << std::endl;\n";
+            postCode.addCode(printMem);
         }
-        else
-        {
-            printTimes = "  std::cout << calc_mean(times_arr) << \",\"\n\
-            << calc_mean(times_arr) + calc_mean(times_arr_train) << std::endl;\n";
-        }
-        postCode.addCode(printTimes);
 
         std::string closeMain = "}";
         postCode.addCode(closeMain);
@@ -1596,12 +1637,12 @@ forward(torch::Tensor t_iden";
     }
 
     // Handle the stream to write to
-    void openStream(std::string& outputPath)
+    void openStream(filesystem::path& outputPath)
     {
-        std::string cmakePath = outputPath + "CMakeLists.txt";
+        std::string cmakePath = outputPath / "CMakeLists.txt";
         this->outStreamCMake = std::ofstream(cmakePath);
 
-        std::string modelPath = outputPath + "gala.cu";
+        std::string modelPath = outputPath / "gala.cu";
         this->outStreamModel = std::ofstream(modelPath);
     }
 

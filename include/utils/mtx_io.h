@@ -10,8 +10,8 @@
 #include <parallel/numeric>
 #include <string>
 
-#include "info_error.h"
-#include "threading_utils.h"
+#include "../../src/utils/info_error.h"
+#include "../../src/utils/threading_utils.h"
 
 /*
  * @todo extend reader with other formats

@@ -78,6 +78,8 @@ loss { return LOSS; }
 optimizer { return OPTIMIZER; }
 iters { return ITERS; }
 validation_step { return VAL_STEP; }
+weight_decay { return WEIGHT_DECAY; }
+learning_rate { return LEARNING_RATE; }
 relax_nln { return RELAXNLN; }
 quant { return QUANT; }
 sensei_op { return SENSEI_OP; }
