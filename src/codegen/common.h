@@ -818,8 +818,9 @@ public:\n\
                     autoGradFunction += "unsupported(NON_LNR_OP_SOFTMAX)\n";
                 }
 
-                autoGradFunction += "    torch::Tensor val_exp = torch::exp(value_graph);\n\
-    val_exp = torch::clamp(val_exp, 0.0, 1e12);\n\
+                autoGradFunction += "    value_graph = value_graph.clone();\n\
+    sparse_softmax_stabilize(offset_graph, columns_graph, value_graph, bounds, global_nrows, segments);\n\
+    torch::Tensor val_exp = torch::exp(value_graph);\n\
     torch::Tensor row_sum = node_spmv_backward_of_sddmm_nln(\n\
         offset_graph, columns_graph, val_exp, bounds, global_nrows,\n\
         segments);\n\
@@ -839,12 +840,12 @@ public:\n\
     torch::Tensor d_value_graph = grad_outputs[0];\n\
     auto saved = ctx->get_saved_variables();\n";
                 autoGradFunction += " int li = ctx->saved_data[\"li\"].toInt();\n\
-        torch::Tensor offset_graph = global_offset_graph[2 * li + 1];\n\
-        torch::Tensor columns_graph = global_columns_graph[2 * li + 1];\n";
+        torch::Tensor offset_graph = global_offset_graph[2 * li];\n\
+        torch::Tensor columns_graph = global_columns_graph[2 * li];\n";
 
                 if (isColTile){
-                    autoGradFunction += "        torch::Tensor bounds = global_bounds[2 * li + 1];\n\
-        int segments = global_segments[2 * li + 1];\n";
+                    autoGradFunction += "        torch::Tensor bounds = global_bounds[2 * li];\n\
+        int segments = global_segments[2 * li];\n";
                 } else
                 {
                     autoGradFunction += "unsupported\n";
@@ -932,13 +933,17 @@ public:\n\
             torch::Tensor offset_graph = global_offset_graph[2 * li + 1];\n\
             torch::Tensor columns_graph = global_columns_graph[2 * li + 1];";
                 if (isColTile){
-                    autoGradFunction += "        torch::Tensor bounds = global_bounds[2 * li];\n\
-            int segments = global_segments[2 * li];\n\
+                    autoGradFunction += "        torch::Tensor bounds = global_bounds[2 * li + 1];\n\
+            int segments = global_segments[2 * li + 1];\n\
+            torch::Tensor bounds_fwd = global_bounds[2 * li];\n\
+            int segments_fwd = global_segments[2 * li];\n\
+            torch::Tensor offset_graph_fwd = global_offset_graph[2 * li];\n\
+            torch::Tensor columns_graph_fwd = global_columns_graph[2 * li];\n\
             torch::Tensor value_graph_T = value_graph.index_select(0, global_transpose_perm.to(value_graph.device()));\n\
             return {" + getKernelName(cNode) + "_call(dZ, offset_graph, columns_graph, value_graph_T,\n\
  bounds, segments),\n\
- edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
-           global_nrows, segments),\n\
+ edge_sddmm(dZ, X, offset_graph_fwd, columns_graph_fwd, value_graph, bounds_fwd,\n\
+           global_nrows, segments_fwd),\n\
  torch::Tensor()};";
                 } else
                 {
@@ -1241,6 +1246,8 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
         {
             std::string reluCall = "        " + generateOutputString(cNode, outOfLoop) + " = torch::relu(" + cNode->getInput(0)->getName() + ");";
             model.getForward()->addCode(reluCall);
+            std::string dropoutCall = "        " + generateOutputString(cNode, outOfLoop) + " = torch::dropout(" + generateOutputString(cNode, outOfLoop) + ", 0.5, this->is_training());";
+            model.getForward()->addCode(dropoutCall);
         } else if (cNode->getOp() == NON_LNR_OP_LEAKY_RELU)
         {
             if (encounteredAutograds.find(getKernelName(cNode)) == encounteredAutograds.end())
@@ -1609,6 +1616,7 @@ forward(torch::Tensor t_iden";
     auto criterion = torch::nn::CrossEntropyLoss();\n\
     torch::Tensor d_loss = criterion(prediction_train, labels_train);\n\
     d_loss.backward();\n\
+    torch::nn::utils::clip_grad_norm_(net->parameters(), 1.0);\n\
     optimizer.step();\n\
     cudaDeviceSynchronize();\n\
     evaluator.end_train();\n\
@@ -1746,19 +1754,29 @@ torch::Tensor global_transpose_perm;\n\
 \n\
 // Compute permutation mapping edge positions to their transpose positions.\n\
 // For a symmetric CSR, edge (i,j) at position p maps to edge (j,i) at position q.\n\
+// Handles multi-tile CSR where offsets has (nrows+1)*segments entries.\n\
 torch::Tensor compute_transpose_perm(torch::Tensor offsets, torch::Tensor columns, int nrows) {\n\
     int *off = offsets.data_ptr<int>();\n\
     int *col = columns.data_ptr<int>();\n\
     int nnz = columns.numel();\n\
+    int segments = offsets.numel() / (nrows + 1);\n\
     auto perm = torch::zeros({nnz}, torch::TensorOptions().dtype(torch::kInt64));\n\
     long *perm_ptr = perm.data_ptr<long>();\n\
     for (int i = 0; i < nrows; i++) {\n\
-        for (int p = off[i]; p < off[i + 1]; p++) {\n\
-            int j = col[p];\n\
-            for (int q = off[j]; q < off[j + 1]; q++) {\n\
-                if (col[q] == i) {\n\
-                    perm_ptr[p] = q;\n\
-                    break;\n\
+        for (int s = 0; s < segments; s++) {\n\
+            int base = s * (nrows + 1);\n\
+            for (int p = off[base + i]; p < off[base + i + 1]; p++) {\n\
+                int j = col[p];\n\
+                bool found = false;\n\
+                for (int s2 = 0; s2 < segments && !found; s2++) {\n\
+                    int base2 = s2 * (nrows + 1);\n\
+                    for (int q = off[base2 + j]; q < off[base2 + j + 1]; q++) {\n\
+                        if (col[q] == i) {\n\
+                            perm_ptr[p] = q;\n\
+                            found = true;\n\
+                            break;\n\
+                        }\n\
+                    }\n\
                 }\n\
             }\n\
         }\n\
@@ -1794,19 +1812,29 @@ std::vector<torch::Tensor> global_value_graph;\n\
 std::vector<torch::Tensor> global_bounds;\n\
 torch::Tensor global_transpose_perm;\n\
 \n\
+// Handles multi-tile CSR where offsets has (nrows+1)*segments entries.\n\
 torch::Tensor compute_transpose_perm(torch::Tensor offsets, torch::Tensor columns, int nrows) {\n\
     int *off = offsets.data_ptr<int>();\n\
     int *col = columns.data_ptr<int>();\n\
     int nnz = columns.numel();\n\
+    int segments = offsets.numel() / (nrows + 1);\n\
     auto perm = torch::zeros({nnz}, torch::TensorOptions().dtype(torch::kInt64));\n\
     long *perm_ptr = perm.data_ptr<long>();\n\
     for (int i = 0; i < nrows; i++) {\n\
-        for (int p = off[i]; p < off[i + 1]; p++) {\n\
-            int j = col[p];\n\
-            for (int q = off[j]; q < off[j + 1]; q++) {\n\
-                if (col[q] == i) {\n\
-                    perm_ptr[p] = q;\n\
-                    break;\n\
+        for (int s = 0; s < segments; s++) {\n\
+            int base = s * (nrows + 1);\n\
+            for (int p = off[base + i]; p < off[base + i + 1]; p++) {\n\
+                int j = col[p];\n\
+                bool found = false;\n\
+                for (int s2 = 0; s2 < segments && !found; s2++) {\n\
+                    int base2 = s2 * (nrows + 1);\n\
+                    for (int q = off[base2 + j]; q < off[base2 + j + 1]; q++) {\n\
+                        if (col[q] == i) {\n\
+                            perm_ptr[p] = q;\n\
+                            found = true;\n\
+                            break;\n\
+                        }\n\
+                    }\n\
                 }\n\
             }\n\
         }\n\

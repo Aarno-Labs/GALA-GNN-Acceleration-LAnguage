@@ -309,11 +309,10 @@ public:
                 kernelCodeStr += ") {\n\
 if (((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) < nrows) {\n";
 
-                // The local register storage
+                // The local register storage (initialized to 0 for multi-tile safety)
                 for (int j = 0; j <= cFact; j++)
                 {
-                    kernelCodeStr += "    float local" + std::to_string(j) + " = C[(((((((int)blockIdx.x) * 8)\
-+ ((int)threadIdx.y)) * dcols + (((int)blockIdx.y) * " + std::to_string(32 * (cFact + 1)) + ")) + ((int)threadIdx.x)) + " + std::to_string(32 * j) + ")];\n";
+                    kernelCodeStr += "    float local" + std::to_string(j) + " = 0;\n";
                 }
 
                 if (isKernelSample) {
@@ -352,9 +351,9 @@ if (((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) < nrows) {\n";
                 for (int j = 0; j <= cFact; j++)
                 {
                 kernelCodeStr += "\n\
-C[((((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) * dcols +\n\
+atomicAdd(&C[((((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) * dcols +\n\
 (((int)blockIdx.y) * " + std::to_string(32 * (cFact + 1)) + ")) +\n\
-((int)threadIdx.x) + " + std::to_string(32 * j) + ")] = local" + std::to_string(j) + ";\n";
+((int)threadIdx.x) + " + std::to_string(32 * j) + ")], local" + std::to_string(j) + ");\n";
                 }
 
                 if (isKernelSample){
@@ -384,12 +383,10 @@ C[((((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) * dcols +\n\
                 kernelCodeStr += ") {\n\
 if (((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) < nrows) {\n";
 
-                // The local register storage
+                // The local register storage (initialized to 0 for multi-tile safety)
                 for (int j = 0; j <= cFact; j++)
                 {
-                    kernelCodeStr += "    float local" + std::to_string(j) + " = C[(((((((int)blockIdx.x) * 8)\
-+ ((int)threadIdx.y)) * dcols + (((int)blockIdx.y) * " + std::to_string(32 * (cFact + 1)) + ")) + ((int)threadIdx.x)) + "
-                    + std::to_string(32 * j) + ") + offset];\n";
+                    kernelCodeStr += "    float local" + std::to_string(j) + " = 0;\n";
                 }
 
                 if (isKernelSample){
@@ -429,9 +426,9 @@ local" + std::to_string(j) + " = local" + std::to_string(j) + " +";
                 for (int j = 0; j <= cFact; j++)
                 {
                 kernelCodeStr += "\n\
-C[((((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) * dcols +\n\
+atomicAdd(&C[((((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) * dcols +\n\
 (((int)blockIdx.y) * " + std::to_string(32 * (cFact + 1)) + ")) +\n\
-((int)threadIdx.x) + " + std::to_string(32 * j) + ") + offset] = local" + std::to_string(j) + ";\n";
+((int)threadIdx.x) + " + std::to_string(32 * j) + ") + offset], local" + std::to_string(j) + ");\n";
                 }
 
                 if (isKernelSample){
@@ -503,7 +500,8 @@ int start_vals = 0;";
             {
                 aggrKernelCall += "}";
             }
-            aggrKernelCall += "for (auto s : streams) cudaStreamDestroy(s);\n\
+            aggrKernelCall += "cudaDeviceSynchronize();\n\
+for (auto s : streams) cudaStreamDestroy(s);\n\
 return output_dense;\n\
 }";
             // Adding the kernel call and setting the name
@@ -512,6 +510,47 @@ return output_dense;\n\
             }
         } else if (cNode->getOp() == NON_LNR_OP_SOFTMAX) {
             std::string kernelCodeStr = "extern \"C\" __global__ void __launch_bounds__(256)\n\
+default_function_kernel_sparse_row_max(\n\
+    float *__restrict__ C, // Output dense (per-row max)\n\
+    int *__restrict__ J_indptr_data,\n\
+    float *__restrict__ A, // Input values\n\
+    int *__restrict__ J_indices_data, int nrows) {\n\
+  int rid = ((int)blockIdx.x) * 32 + ((int)threadIdx.x);\n\
+  if (rid < nrows) {\n\
+    int start = J_indptr_data[rid];\n\
+    int end = J_indptr_data[rid + 1];\n\
+    float local_max = -1e30f;\n\
+    for (int j = start; j < end; ++j) {\n\
+      float v = A[j];\n\
+      if (v > local_max) local_max = v;\n\
+    }\n\
+    // Use atomicMax via CAS for float (needed for multi-tile)\n\
+    int *addr_as_int = (int*)&C[rid];\n\
+    int old_val = *addr_as_int, assumed;\n\
+    do {\n\
+      assumed = old_val;\n\
+      old_val = atomicCAS(addr_as_int, assumed,\n\
+                          __float_as_int(fmaxf(local_max, __int_as_float(assumed))));\n\
+    } while (assumed != old_val);\n\
+  }\n\
+}\n\
+extern \"C\" __global__ void __launch_bounds__(256)\n\
+default_function_kernel_sparse_row_subtract(\n\
+    float *__restrict__ A, // Values (modified in place)\n\
+    int *__restrict__ J_indptr_data,\n\
+    float *__restrict__ C, // Per-row max values\n\
+    int *__restrict__ J_indices_data, int nrows) {\n\
+  if (((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) < nrows) {\n\
+    int rid = (((int)blockIdx.x) * 8) + ((int)threadIdx.y);\n\
+    float row_max = C[rid];\n\
+    for (int j = (int)threadIdx.x;\n\
+         j < (J_indptr_data[rid + 1] - J_indptr_data[rid]);\n\
+         j += 32) {\n\
+      A[j + J_indptr_data[rid]] -= row_max;\n\
+    }\n\
+  }\n\
+}\n\
+extern \"C\" __global__ void __launch_bounds__(256)\n\
 default_function_kernel_spmm_backward_sddmm_32_nln(\n\
     float *__restrict__ C, // Output dense\n\
     int *__restrict__ J_indptr_data,\n\
@@ -527,8 +566,7 @@ default_function_kernel_spmm_backward_sddmm_32_nln(\n\
       local_C = (local_C + (A[(j + J_indptr_data[((((int)blockIdx.x) * 32) +\n\
                                                   ((int)threadIdx.x))])]));\n\
     }\n\
-    C[((((int)blockIdx.x) * 32) + ((int)threadIdx.x))] =\n\
-        C[((((int)blockIdx.x) * 32) + ((int)threadIdx.x))] + local_C;\n\
+    atomicAdd(&C[((((int)blockIdx.x) * 32) + ((int)threadIdx.x))], local_C);\n\
   }\n\
 }\n\
 extern \"C\" __global__ void __launch_bounds__(256)\n\
@@ -571,7 +609,43 @@ default_function_kernel_mult_sddvv_undir(\n\
 }";
             kernelCode.addCode(kernelCodeStr);
 
-            std::string kernelCallCodeStr = "torch::Tensor node_spmv_backward_of_sddmm_nln(torch::Tensor offset_graph,\n\
+            std::string kernelCallCodeStr = "void sparse_softmax_stabilize(torch::Tensor offset_graph,\n\
+                                          torch::Tensor columns_graph,\n\
+                                          torch::Tensor value_graph,\n\
+                                          torch::Tensor bounds, int nrows,\n\
+                                          int segments) {\n\
+  // Compute per-row max for numerical stability\n\
+  auto options_nograd = torch::TensorOptions()\n\
+                     .dtype(torch::kFloat)\n\
+                     .requires_grad(false)\n\
+                     .device(torch::kCUDA, 0);\n\
+  auto row_max = torch::full({nrows}, -1e30f, options_nograd);\n\
+  float *max_array = row_max.data_ptr<float>();\n\
+  int *offset_ptr = offset_graph.data_ptr<int>();\n\
+  int *col_ptr = columns_graph.data_ptr<int>();\n\
+  float *val_ptr = value_graph.data_ptr<float>();\n\
+  int *bounds_ptr = bounds.data_ptr<int>();\n\
+  for (int i = 0; i < segments; i++) {\n\
+    int start_vals = bounds_ptr[i * 2];\n\
+    dim3 gridDim_rem(((int)(nrows - 1) / 32) + 1);\n\
+    dim3 blockDim_rem(32);\n\
+    default_function_kernel_sparse_row_max<<<gridDim_rem, blockDim_rem>>>(\n\
+        max_array, &offset_ptr[i * (nrows + 1)], &val_ptr[start_vals],\n\
+        &col_ptr[start_vals], nrows);\n\
+  }\n\
+  cudaDeviceSynchronize();\n\
+  // Subtract per-row max from values\n\
+  for (int i = 0; i < segments; i++) {\n\
+    int start_vals = bounds_ptr[i * 2];\n\
+    dim3 gridDim_sub(((int)(nrows - 1) / 8) + 1);\n\
+    dim3 blockDim_sub(32, 8);\n\
+    default_function_kernel_sparse_row_subtract<<<gridDim_sub, blockDim_sub>>>(\n\
+        &val_ptr[start_vals], &offset_ptr[i * (nrows + 1)], max_array,\n\
+        &col_ptr[start_vals], nrows);\n\
+  }\n\
+  cudaDeviceSynchronize();\n\
+}\n\
+torch::Tensor node_spmv_backward_of_sddmm_nln(torch::Tensor offset_graph,\n\
                                           torch::Tensor columns_graph,\n\
                                           torch::Tensor value_graph,\n\
                                           torch::Tensor bounds, int nrows,\n\
@@ -606,6 +680,7 @@ default_function_kernel_mult_sddvv_undir(\n\
         oden_array, &offset_ptr[i1 * (nrows + 1)], &val_ptr[start_vals],\n\
         &col_ptr[start_vals], nrows);\n\
   }\n\
+  cudaDeviceSynchronize();\n\
   for (auto s : streams) cudaStreamDestroy(s);\n\
 \n\
   return output_dense;\n\
@@ -638,7 +713,8 @@ torch::Tensor inplace_softmax_sddvv(torch::Tensor row_val,\n\
             &val_ptr[start_vals], &offset_ptr[i1 * (nrows + 1)], row_val_ptr,\n\
             &col_ptr[start_vals], nrows);\n\
     }\n\
-    for (auto s : streams) cudaStreamDestroy(s);\n\
+    cudaDeviceSynchronize();\n\
+  for (auto s : streams) cudaStreamDestroy(s);\n\
     return value_graph;\n\
 }\n\
 torch::Tensor inplace_softmax_sddvv_mult(torch::Tensor row_val,\n\
@@ -669,7 +745,8 @@ torch::Tensor inplace_softmax_sddvv_mult(torch::Tensor row_val,\n\
             &val_ptr[start_vals], &offset_ptr[i1 * (nrows + 1)], row_val_ptr,\n\
             &col_ptr[start_vals], nrows);\n\
     }\n\
-    for (auto s : streams) cudaStreamDestroy(s);\n\
+    cudaDeviceSynchronize();\n\
+  for (auto s : streams) cudaStreamDestroy(s);\n\
     return value_graph;\n\
 }";
             kernelCallCode.addCode(kernelCallCodeStr);
@@ -690,8 +767,7 @@ torch::Tensor inplace_softmax_sddvv_mult(torch::Tensor row_val,\n\
       local_C = (local_C + (A[(j + J_indptr_data[((((int)blockIdx.x) * 32) +\n\
                                                   ((int)threadIdx.x))])]));\n\
     }\n\
-    C[((((int)blockIdx.x) * 32) + ((int)threadIdx.x))] =\n\
-        C[((((int)blockIdx.x) * 32) + ((int)threadIdx.x))] + local_C;\n\
+    atomicAdd(&C[((((int)blockIdx.x) * 32) + ((int)threadIdx.x))], local_C);\n\
   }\n\
 }\n\
 extern \"C\" __global__ void __launch_bounds__(256)\n\
@@ -722,15 +798,15 @@ default_function_kernel_sddmm_mult_undir_shared(\n\
     float *__restrict__ B,           // Input B\n\
     int *__restrict__ J_indices_data, int nrows, int dcols) {\n\
     extern __shared__ float shared_mem[];\n\
-    if (((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) < nrows) { // This is fine\n\
+    if (((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) < nrows) {\n\
         for (int k = threadIdx.x; k < dcols; k += 32) {\n\
             if (k < dcols) {\n\
-                shared_mem[k] =\n\
+                shared_mem[((int)threadIdx.y) * dcols + k] =\n\
                     A[((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) * dcols + k];\n\
             }\n\
         }\n\
         __syncthreads();\n\
-        for (int j = (int)threadIdx.x; // Not fine. This should increase by 32\n\
+        for (int j = (int)threadIdx.x;\n\
              j <\n\
              (J_indptr_data[(((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) + 1)] -\n\
               J_indptr_data[((((int)blockIdx.x) * 8) + ((int)threadIdx.y))]);\n\
@@ -739,7 +815,7 @@ default_function_kernel_sddmm_mult_undir_shared(\n\
             for (int k = 0; k < dcols; k++) {\n\
                 local_C =\n\
                     local_C +\n\
-                    ((shared_mem[k] *\n\
+                    ((shared_mem[((int)threadIdx.y) * dcols + k] *\n\
                       B[(J_indices_data[(j + J_indptr_data[((((int)blockIdx.x) * 8) +\n\
                                                             ((int)threadIdx.y))])]) *\n\
                             dcols +\n\
@@ -787,6 +863,7 @@ default_function_kernel_sddmm_mult_undir_shared(\n\
         oden_array, &offset_ptr[i1 * (nrows + 1)], &val_ptr[start_vals],\n\
         &col_ptr[start_vals], nrows);\n\
   }\n\
+  cudaDeviceSynchronize();\n\
   for (auto s : streams) cudaStreamDestroy(s);\n\
 \n\
   return output_dense;\n\
@@ -826,7 +903,8 @@ torch::Tensor bounds, int nrows, int segments) {\n\
             &oden_array[start_vals], &offset_ptr[i1 * (nrows + 1)], iden_ptr1,\n\
             iden_ptr2, &col_ptr[start_vals], nrows);\n\
     }\n\
-    for (auto s : streams) cudaStreamDestroy(s);\n\
+    cudaDeviceSynchronize();\n\
+  for (auto s : streams) cudaStreamDestroy(s);\n\
     return output_sparse;\n\
 }\n\
 torch::Tensor edge_sddmm(torch::Tensor input_dense1, torch::Tensor input_dense2,\n\
@@ -861,13 +939,14 @@ torch::Tensor bounds, int nrows, int segments) {\n\
         streams.push_back(stream1);\n\
         dim3 gridDim(((int)(nrows - 1) / 8) + 1);\n\
         dim3 blockDim(32, 8);\n\
-        int shared_memory_size = dcols * sizeof(float);\n\
+        int shared_memory_size = dcols * 8 * sizeof(float);\n\
         default_function_kernel_sddmm_mult_undir_shared<<<\n\
             gridDim, blockDim, shared_memory_size, stream1>>>(\n\
             &oden_array[start_vals], &offset_ptr[i1 * (nrows + 1)], iden_ptr1,\n\
             iden_ptr2, &col_ptr[start_vals], nrows, dcols);\n\
     }\n\
-    for (auto s : streams) cudaStreamDestroy(s);\n\
+    cudaDeviceSynchronize();\n\
+  for (auto s : streams) cudaStreamDestroy(s);\n\
     return output_sparse;\n\
 }\n";
             kernelCallCode.addCode(kernelCallCodeStr);
@@ -942,6 +1021,7 @@ torch::Tensor bounds, int nrows, int segments) {\n\
           &oden_array[start_vals], &offset_ptr[i1 * (nrows + 1)], iden_ptr1,\n\
           iden_ptr2, &col_ptr[start_vals], nrows);\n\
   }\n\
+  cudaDeviceSynchronize();\n\
   for (auto s : streams) cudaStreamDestroy(s);\n\
   return output_sparse;\n\
 }\n";
@@ -978,6 +1058,7 @@ torch::Tensor bounds, int nrows, int segments) {\n\
                                                  stream1>>>(\n\
           oden_array, offset_ptr, iden_ptr1,\n\
           iden_ptr2, col_ptr, nrows);\n\
+  cudaDeviceSynchronize();\n\
   cudaStreamDestroy(stream1);\n\
   return output_sparse;\n\
 }\n";
