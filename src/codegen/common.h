@@ -490,6 +490,15 @@ public:
                         {
                             resString += "  global_segments.push_back(segments_" + dNode->getName() + ");\n";
                             resString += "  global_bounds.push_back(total_bounds_" + dNode->getName() + ");\n";
+                            // Compute transpose permutation for symmetric graphs.
+                            // Attention values are NOT symmetric even on undirected graphs
+                            // (different softmax normalizations per row), so the backward
+                            // pass needs permuted edge values for the transpose SpMV.
+                            resString += "  {\n\
+    auto cpu_offsets = total_offsets_" + dNode->getName() + ".cpu();\n\
+    auto cpu_cols = total_cols_" + dNode->getName() + ".cpu();\n\
+    global_transpose_perm = compute_transpose_perm(cpu_offsets, cpu_cols, nrows).to(torch::kCUDA);\n\
+  }\n";
                         } else
                         {
                             std::string tilingParam;
@@ -703,15 +712,19 @@ public:\n\
                              torch::autograd::tensor_list grad_outputs) {\n\
                     torch::Tensor d_value_graph = grad_outputs[0];\n";
                 autoGradFunction += " int li = ctx->saved_data[\"li\"].toInt();\n\
-        torch::Tensor offset_graph = global_offset_graph[2 * li + 1];\n\
-        torch::Tensor columns_graph = global_columns_graph[2 * li + 1];\n\
-        torch::Tensor bounds = global_bounds[2 * li + 1];\n\
-        int segments = global_segments[2 * li + 1];\n\
-        torch::Tensor back_res = node_spmv_backward_of_sddmm_eaggr(\n\
-                    offset_graph, columns_graph, // This should be the reverse graph\n\
+        torch::Tensor offset_graph = global_offset_graph[2 * li];\n\
+        torch::Tensor columns_graph = global_columns_graph[2 * li];\n\
+        torch::Tensor bounds = global_bounds[2 * li];\n\
+        int segments = global_segments[2 * li];\n\
+        torch::Tensor back_res1 = node_spmv_backward_of_sddmm_eaggr(\n\
+                    offset_graph, columns_graph,\n\
                     d_value_graph, bounds, global_nrows, segments);\n\
-        return {back_res,\n\
-                back_res,\n\
+        torch::Tensor d_value_graph_T = d_value_graph.index_select(0, global_transpose_perm.to(d_value_graph.device()));\n\
+        torch::Tensor back_res2 = node_spmv_backward_of_sddmm_eaggr(\n\
+                    offset_graph, columns_graph,\n\
+                    d_value_graph_T, bounds, global_nrows, segments);\n\
+        return {back_res1,\n\
+                back_res2,\n\
                 torch::Tensor()};\n\
     }\n\
 };\n";
@@ -921,7 +934,8 @@ public:\n\
                 if (isColTile){
                     autoGradFunction += "        torch::Tensor bounds = global_bounds[2 * li];\n\
             int segments = global_segments[2 * li];\n\
-            return {" + getKernelName(cNode) + "_call(dZ, offset_graph, columns_graph, value_graph,\n\
+            torch::Tensor value_graph_T = value_graph.index_select(0, global_transpose_perm.to(value_graph.device()));\n\
+            return {" + getKernelName(cNode) + "_call(dZ, offset_graph, columns_graph, value_graph_T,\n\
  bounds, segments),\n\
  edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
            global_nrows, segments),\n\
@@ -930,8 +944,9 @@ public:\n\
                 {
                     // TODO add codegen for non-col tile
                     autoGradFunction += "\
+            torch::Tensor value_graph_T = value_graph.index_select(0, global_transpose_perm.to(value_graph.device()));\n\
             return {" + getKernelName(cNode) + "_call(dZ, offset_graph, columns_graph,\n\
-                                       value_graph),\n\
+                                       value_graph_T),\n\
 edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
            global_nrows, 1), torch::Tensor()};\n";
                 }
@@ -1528,6 +1543,16 @@ forward(torch::Tensor t_iden";
                 std::string modelTransfer = "net->to(device);";
                 model.getPreCall()->addCode(modelTransfer);
 
+                // Initialize weights with Xavier/Glorot uniform (matching PyG's GATConv)
+                std::string initCode = "for (auto& p : net->named_parameters()) {\n\
+    if (p.value().dim() >= 2) {\n\
+        torch::nn::init::xavier_uniform_(p.value());\n\
+    } else {\n\
+        torch::nn::init::zeros_(p.value());\n\
+    }\n\
+}\n";
+                model.getPreCall()->addCode(initCode);
+
                 if (loopNode->getOptimizer() == ADAM)
                 {
                     std::string optmCode = "torch::optim::Adam optimizer(\n\
@@ -1716,7 +1741,30 @@ bool global_is_directed;\n\
 std::vector<torch::Tensor> global_offset_graph;\n\
 std::vector<torch::Tensor> global_columns_graph;\n\
 std::vector<torch::Tensor> global_value_graph;\n\
-std::vector<torch::Tensor> global_bounds;\n";
+std::vector<torch::Tensor> global_bounds;\n\
+torch::Tensor global_transpose_perm;\n\
+\n\
+// Compute permutation mapping edge positions to their transpose positions.\n\
+// For a symmetric CSR, edge (i,j) at position p maps to edge (j,i) at position q.\n\
+torch::Tensor compute_transpose_perm(torch::Tensor offsets, torch::Tensor columns, int nrows) {\n\
+    int *off = offsets.data_ptr<int>();\n\
+    int *col = columns.data_ptr<int>();\n\
+    int nnz = columns.numel();\n\
+    auto perm = torch::zeros({nnz}, torch::TensorOptions().dtype(torch::kInt64));\n\
+    long *perm_ptr = perm.data_ptr<long>();\n\
+    for (int i = 0; i < nrows; i++) {\n\
+        for (int p = off[i]; p < off[i + 1]; p++) {\n\
+            int j = col[p];\n\
+            for (int q = off[j]; q < off[j + 1]; q++) {\n\
+                if (col[q] == i) {\n\
+                    perm_ptr[p] = q;\n\
+                    break;\n\
+                }\n\
+            }\n\
+        }\n\
+    }\n\
+    return perm;\n\
+}\n";
         } else
         {
             tempStdCommon = "#include <algorithm>\n\
@@ -1743,7 +1791,28 @@ bool global_is_directed;\n\
 std::vector<torch::Tensor> global_offset_graph;\n\
 std::vector<torch::Tensor> global_columns_graph;\n\
 std::vector<torch::Tensor> global_value_graph;\n\
-std::vector<torch::Tensor> global_bounds;\n";
+std::vector<torch::Tensor> global_bounds;\n\
+torch::Tensor global_transpose_perm;\n\
+\n\
+torch::Tensor compute_transpose_perm(torch::Tensor offsets, torch::Tensor columns, int nrows) {\n\
+    int *off = offsets.data_ptr<int>();\n\
+    int *col = columns.data_ptr<int>();\n\
+    int nnz = columns.numel();\n\
+    auto perm = torch::zeros({nnz}, torch::TensorOptions().dtype(torch::kInt64));\n\
+    long *perm_ptr = perm.data_ptr<long>();\n\
+    for (int i = 0; i < nrows; i++) {\n\
+        for (int p = off[i]; p < off[i + 1]; p++) {\n\
+            int j = col[p];\n\
+            for (int q = off[j]; q < off[j + 1]; q++) {\n\
+                if (col[q] == i) {\n\
+                    perm_ptr[p] = q;\n\
+                    break;\n\
+                }\n\
+            }\n\
+        }\n\
+    }\n\
+    return perm;\n\
+}\n";
         }
 
         importCode.addCode(tempStdCommon);
