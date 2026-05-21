@@ -62,6 +62,47 @@ public:
 //  a PyTorch linking component
 class Code
 {
+public:
+        class EProxy
+        {
+            private:
+                std::string e;
+            public:
+                EProxy(std::string e) : e(e) {}
+                EProxy(int x) : e(std::to_string(x)) {}
+                operator std::string()
+                {
+                    return e;
+                }
+
+                std::string str() { return e; }
+                
+                EProxy operator[](EProxy i)
+                {
+                    return EProxy(e + "[" + i.str() + "]");
+                }
+
+                EProxy operator*(int i)
+                {
+                    return EProxy("(" + e + ")" + " * " + EProxy(i).str());
+                }
+                
+                EProxy operator()(std::vector<EProxy> args)
+                {
+                    std::vector<std::string> strArgs;
+                    for (auto &a : args) {
+                        strArgs.push_back(a.str());
+                    }
+                    return EProxy(Code::callFn(e, strArgs));
+                }
+
+                EProxy operator->*(std::string fld)
+                {
+                   return EProxy(e + "->" + fld); 
+                }
+        };
+        // (foo->)x
+
 private:
     std::vector<std::string> codeLines;
 
@@ -197,6 +238,21 @@ public:
         return &(this->codeLines.at(ix));
     }
 };
+
+Code::EProxy operator*(int a, Code::EProxy b)
+{
+    return Code::EProxy(a).str() + " * " + "(" + b.str() + ")";
+}
+
+Code::EProxy operator+(int a, Code::EProxy b)
+{
+    return Code::EProxy(a).str() + " + " + "(" + b.str() + ")";
+}
+
+Code::EProxy operator+(Code::EProxy a, int b)
+{
+    return "(" + Code::EProxy(a).str() + ") + " + Code::EProxy(b).str();
+}
 
 class FunctionParameter
 {
@@ -365,6 +421,7 @@ public:
       std::string const getName() { return name; }
       std::optional<string> const getInitializer() { return initializer; }
     };
+
     Class(std::string _name, std::string _base, std::vector<Field> _fields, bool _isStruct=false)
         : name(_name), base(std::optional(_base)), fields(_fields), isStruct(_isStruct) {}
 
@@ -1336,6 +1393,26 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 if (encounteredAutograds.find(getKernelName(cNode)) == encounteredAutograds.end())
                 {
                     encounteredAutograds.insert(getKernelName(cNode));
+                    Class *kernel = new Class(getKernelName(cNode) + "_AutoGrad", "torch::autograd::Function<"+getKernelName(cNode)+">", {});
+                    auto forward = kernel->addMethod("forward", "torch::Tensor", true, 1);
+                    auto ctx = Code::EProxy(forward->addArgument("torch::autograd::AutogradContext*", "ctx"));
+                    auto gnn = Code::EProxy(forward->addArgument("GALAGNN*", "gnn"));
+                    auto input_dense = Code::EProxy(forward->addArgument("torch::Tensor", "input_dense"));
+                    auto li = Code::EProxy(forward->addArgument("int", "li"));
+                    auto forwardCode = forward->getCode();
+                    auto offset_graph = forwardCode->declare("torch::Tensor", "offset_graph", ((gnn->*"global_offset_graph")[2 * li]));
+                    auto columns_graph = forwardCode->declare("torch::Tensor", "columns_graph", ((gnn->*"global_columns_graph")[2 * li]));
+                    auto value_graph = forwardCode->declare("torch::Tensor", "value_graph", ((gnn->*"global_value_graph")[2 * li]));
+                    auto sfb = ctx->*("save_for_backward");
+                    forwardCode->expr(sfb({ 
+                        (gnn->*"global_offset_graph")[2*li + 1],
+                        (gnn->*"global_columns_graph")[2*li + 1],
+                        (gnn->*"global_value_graph")[2*li + 1],
+                        (gnn->*"global_bounds")[2*li + 1],
+                    }).str());
+                    forwardCode->assign((ctx->*("saved_data"))[Code::str("segments")], (gnn->*("global_segments"))[2*li + 1]);
+                    forwardCode->assign((ctx->*("saved_data"))[Code::str("nrows")], (gnn->*("global_nrows"))[2*li + 1]);
+
 
                     std::string autoGradFunction = ""
   

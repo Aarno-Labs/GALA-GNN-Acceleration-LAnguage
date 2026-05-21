@@ -1,7 +1,7 @@
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 setup(
-    name='gala_goo',
+    name='gala_gnn',
     ext_modules=[
         CUDAExtension(
                 name='gala_model',

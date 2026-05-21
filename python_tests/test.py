@@ -5,6 +5,8 @@ import numpy
 import gala_model
 
 DATA_PATH = Path("../Data/Cora")
+NFEATS=1433
+LABS=7
 
 def load_adj_matrix() -> sparse.csr_matrix:
   adj_src = numpy.load(
@@ -36,13 +38,15 @@ def make(m: sparse.csr_matrix):
     cols, 
     offsets,
     None,
-    1433,
+    NFEATS,
     32,
-    7,
-    7
+    LABS,
+    LABS
   )
 
 adj_mtx_sparse = load_adj_matrix()
+nrows = adj_mtx_sparse.shape[0]
+print(f"adj matrix shape: {adj_mtx_sparse.shape}")
 m = make(adj_mtx_sparse)
 
 # These are row major ..?
@@ -57,6 +61,7 @@ test_mask_load  = torch.from_numpy(numpy.load(DATA_PATH / "TsMsk.npy")).type(dty
 classes = labels.max()
 
 # Move to device?
+torch.cuda.set_device(0)
 device = torch.device('cuda:0')
 input_emb = input_emb.to(device=device)
 labels = labels.to(device=device)
@@ -66,25 +71,32 @@ test_mask = test_mask_load.to(device=device)
 
 m.to(device=device, dtype=None)
 
-opt = torch.optim.Adam(m.parameters(), lr=0.01, weight_decay=5e-4)
-for epoch in range(5000):
+def check_against_test():
   torch.cuda.synchronize()
-  opt.zero_grad()
+  prediction = m.forward(input_emb, 0, 1)[0]
   torch.cuda.synchronize()
-  prediction = m.forward(input_emb, epoch, 1)[0]
-  torch.cuda.synchronize()
-  prediction_train = prediction[train_mask.reshape(2708)]
-  labels_train = labels[train_mask.reshape(2708)]
+  predict_validate = prediction[test_mask.reshape(nrows)]
+  labels_validate = labels[test_mask.reshape(nrows)]
   criterion = torch.nn.CrossEntropyLoss()
-  d_loss = criterion(prediction_train, labels_train.reshape(140))
   torch.cuda.synchronize()
-  d_loss.backward()
+  d_loss = criterion(predict_validate, labels_validate.reshape(labels_validate.shape[0]))
   torch.cuda.synchronize()
-  opt.step()
+  print(d_loss)
 
-prediction = m.forward(input_emb, 10000, 1)[0]
-predict_validate = prediction[valid_mask.reshape(2708)]
-labels_validate = labels[valid_mask.reshape(2708)]
-criterion = torch.nn.CrossEntropyLoss()
-d_loss = criterion(predict_validate, labels_validate.reshape(labels_validate.shape[0]))
-print(d_loss)
+
+where = -1
+opt = torch.optim.Adam(m.parameters(), lr=0.01, weight_decay=5e-4)
+t_reshape = train_mask.reshape(nrows)
+labels_train = labels[t_reshape].reshape(140)
+for epoch in range(500):
+  opt.zero_grad()
+  prediction = m.forward(input_emb, epoch, 1)[0]
+  prediction_train = prediction[train_mask.reshape(nrows)]
+  criterion = torch.nn.CrossEntropyLoss()
+  d_loss = criterion(prediction_train, labels_train)
+  prediction_train = None
+  prediction = None
+  d_loss.backward()
+  opt.step()
+  d_loss = None
+  check_against_test()
