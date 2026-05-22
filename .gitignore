@@ -12,3 +12,16 @@
 /utils/third_party/parmat/Release/src/Edge.o
 /utils/third_party/parmat/Release/src/Edge.d
 /data_schedule/
+/build/
+/codegen/build/
+/codegen_python/
+/codegen_test/
+/codegen_scratch/
+/Data/*
+/scripts/*
+!/scripts/WiseGraph/a100
+!/scripts/WiseGraph/h100
+/tests/CMakeFiles
+/tests/codegen
+/tests/output
+/python
