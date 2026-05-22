@@ -496,7 +496,7 @@ public:
   FunctionBuilder forward{
       FunctionBuilder("forward", {}, "std::vector<torch::Tensor>", false, 2)
   };
-  FunctionBuilder invFunction{FunctionBuilder("inv", {}, "void", false)};
+  FunctionBuilder invFunction{FunctionBuilder("inv", { FunctionParameter("SM&", "adj0"), FunctionParameter("torch::Tensor&", "t_iden")}, "void", false)};
   FunctionBuilder constructor{
       FunctionBuilder("GALAGNN",
                       {FunctionParameter("SM&", "adj0"),
@@ -718,11 +718,15 @@ protected:
     std::ofstream outStreamModel;
     std::ofstream outStreamModelHeader;
     std::ofstream outStreamCMake;
+    std::string dataRoot;
 
 public:
-    CodeGenerator(GALAContext* context, std::string& outputPath)
+    CodeGenerator(GALAContext* context, std::string& outputPath, std::string dataRoot)
     {
         this->context = context;
+        this->dataRoot = dataRoot;
+        if (!this->dataRoot.empty() && this->dataRoot.back() == '/')
+            this->dataRoot.pop_back();
         this->openStream(outputPath);
     }
 
@@ -1019,7 +1023,7 @@ public:
             std::string emb_type = GALAFEContext::use_long ? "DM" : "DenseMatrix<ind1_t, ind2_t, val_t>";
             std::string lab_type = GALAFEContext::use_long ? "DL" : "DenseMatrix<ind1_t, ind2_t, lab_t>";
             mainBuilderCode->declare("SM", "adj0");
-            mainBuilderCode->declare("std::string", "filename", "\"../../Data/" + cNode->getParam(0) +  "/\"");
+            mainBuilderCode->declare("std::string", "filename", "\"" + this->dataRoot + "/" + cNode->getParam(0) +  "/\"");
             mainBuilderCode->expr(
                 Code::callFn("readSM_npy32<SM>", { "filename", "&adj0" })
             );
@@ -1651,7 +1655,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                     Code::callFn(getKernelName(cNode) + "_call", {
                         cNode->getInput(0)->getName(),
                         offset_graph_ones, columns_graph_ones,
-                        value_graph_ones, bounds_ones, segments_ones }));
+                        value_graph_ones, bounds_ones, "global_nrows", segments_ones }));
             } else
             {
                 target->assign(
@@ -1669,14 +1673,16 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
             }
             if (outOfLoop)
             {
+                model.getInv()->comment("this one");
                 model.getInv()->assign(
                     generateOutputString(cNode, outOfLoop),
                     Code::callMethod(
                         Code::callFn("torch::pow", { cNode->getInput(0)->getName(), cNode->getParam(0) }),
                         "detach"));
+                model.getInv()->assign("this->" + cNode->getOutput(0)->getName(), cNode->getOutput(0)->getName());
                 // TODO: Temporary method to add kernel call
-                model.getCall()->addCode("," + cNode->getOutput(0)->getName());
-                model.getGalaGNN()->forward.addArgument("torch::Tensor", cNode->getOutput(0)->getName());
+                // model.getCall()->addCode("," + cNode->getOutput(0)->getName());
+                model.getGalaGNN()->addField(Class::Field("torch::Tensor", cNode->getOutput(0)->getName()));
             } else
             {
                 model.getForwardCode()->assign(
@@ -1793,7 +1799,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 Code::callMethodPtr("fc" + std::to_string(fcCount - 1), "forward", { cNode->getInput(0)->getName() }));
         } else if (cNode->getOp() == FFN_OP_EDGE)
         {
-            std::string efc = model.addField("torch::nn::Linear", "efc" + std::to_string(fcEdgeCount), std::optional(nullptr));
+            std::string efc = model.addField("torch::nn::Linear", "efc" + std::to_string(fcEdgeCount), std::optional("nullptr"));
             model.getConstructor()->getCode()->assign(
                 efc,
                 Code::callFn("register_module",
@@ -1805,7 +1811,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
             fcEdgeCount++;
         }  else if (cNode->getOp() == FFN_OP_SELF)
         {
-            std::string sfc = model.addField("torch::nn::Linear", "sfc" + std::to_string(fcSelfCount), std::optional(nullptr));
+            std::string sfc = model.addField("torch::nn::Linear", "sfc" + std::to_string(fcSelfCount), std::optional("nullptr"));
 
             if (fcSelfCount == 0)
             {
@@ -1849,7 +1855,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
             std::string rowDims = processDims(outputInfo->getDimRow());
             std::string colDims = processDims(outputInfo->getDimCol());
 
-            importCode.declare("const torch::TensorOptions", "auto options_" + cNode->getOutput(0)->getName(),
+            importCode.declare("const torch::TensorOptions", "options_" + cNode->getOutput(0)->getName(),
                                "torch::TensorOptions().dtype(torch::kFloat).requires_grad(false).device(torch::kCUDA, 0)");
 
             {
@@ -1983,6 +1989,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 }
 
                 model.getPreCall()->expr(Code::callMethodPtr("net", "to", { "device" }));
+                model.getPreCall()->expr(Code::callMethodPtr("net", "inv", { "adj0", "t_iden"}));
 
                 if (loopNode->getOptimizer() == ADAM)
                 {
@@ -2083,11 +2090,6 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
 
         model.getConstructor()->getCode()->expr(
             Code::callFn(model.getTransform()->getName(), { "adj0", "train_mask" })
-        );
-
-        // TODO Find the right place for this call
-        model.getConstructor()->getCode()->expr(
-            Code::callFn(model.getInvFunction()->getName(), {})
         );
 
         // Generate smart constructor for python
