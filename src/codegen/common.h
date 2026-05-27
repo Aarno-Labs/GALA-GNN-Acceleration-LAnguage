@@ -1418,7 +1418,6 @@ public:
                                 { dZ, X, back_offset_graph, back_columns_graph, back_value_graph, back_bounds, back_nrows, "1" }));
                         kernelBackwardCode->ret(Code::vec({ "torch::Tensor()", res1, res2, "torch::Tensor()" }));
                     }
-                    std::cout << "Here??\n";
                     kernels.push_back(kernel);
                 }
                 if (outOfLoop)
@@ -1466,9 +1465,6 @@ public:
                     auto offset_graph = forwardCode->declare("torch::Tensor", "offset_graph", ((gnn->*"global_offset_graph")[2 * li]));
                     auto columns_graph = forwardCode->declare("torch::Tensor", "columns_graph", ((gnn->*"global_columns_graph")[2 * li]));
                     auto value_graph = forwardCode->declare("torch::Tensor", "value_graph", ((gnn->*"global_value_graph")[2 * li]));
-                    auto sfb = ctx->*("save_for_backward");
-
-
                     forwardCode->expr(Code::callMethodPtr(ctx, "save_for_backward",
                         {Code::vec({ 
                         (gnn->*"global_offset_graph")[2*li + 1],
@@ -1480,60 +1476,43 @@ public:
                     forwardCode->assign((ctx->*("saved_data"))[Code::str("nrows")], gnn->*("global_nrows"));
 
 
-                    std::string autoGradFunction = ""
-  
-    "class " + getKernelName(cNode) + "_AutoGrad : public torch::autograd::Function<" + getKernelName(cNode) + "_AutoGrad> {\n\
-    public:\n\
-        static torch::Tensor forward(torch::autograd::AutogradContext *ctx,\n\
-                                     GALAGNN *gnn,\n\
-                                     torch::Tensor input_dense, int li) {\n\
-            torch::Tensor offset_graph = gnn->global_offset_graph[2 * li];\n\
-            torch::Tensor columns_graph = gnn->global_columns_graph[2 * li];\n\
-            torch::Tensor value_graph = gnn->global_value_graph[2 * li];\n";
-                auto toSave = Code::vec({
-                    "gnn->global_offset_graph[2*li + 1]",
-                    "gnn->global_columns_graph[2*li + 1]",
-                    "gnn->global_value_graph[2*li + 1]",
-                    "gnn->global_bounds[2*li + 1]",
-                });
-                autoGradFunction += "ctx->save_for_backward(" + toSave + ");";
-                autoGradFunction += "ctx->saved_data[\"segments\"] = gnn->global_segments[2*li + 1];";
-                autoGradFunction += "ctx->saved_data[\"nrows\"] = gnn->global_nrows;";
-                if (isColTile){
-                    autoGradFunction += "        torch::Tensor bounds = gnn->global_bounds[2 * li];\n\
-            int segments = gnn->global_segments[2 * li];\n\
-             return " + getKernelName(cNode) + "_call(input_dense, offset_graph, columns_graph,\n\
-                                value_graph, bounds, gnn->global_nrows, segments);\n";
-                } else
-                {
-                    autoGradFunction += "        return " + getKernelName(cNode) + "_call(input_dense, offset_graph, columns_graph,\n\
-                                      value_graph);\n";
-                }
-                autoGradFunction += "    }\n\
-    \n\
-        static torch::autograd::tensor_list\n\
-        backward(torch::autograd::AutogradContext *ctx,\n\
-                 torch::autograd::tensor_list grad_outputs) {\n\
-            torch::Tensor input_dense = grad_outputs[0];\n\
-            auto saved = ctx->get_saved_variables();\n\
-            torch::Tensor offset_graph = saved[0];\n\
-            torch::Tensor columns_graph = saved[1];\n\
-            torch::Tensor value_graph = saved[2];\n";
-                autoGradFunction += "       int nrows = ctx->saved_data[\"nrows\"].toInt();\n";
-                if (isColTile){
-                    autoGradFunction += "        torch::Tensor bounds = saved[3];\n\
-            int segments = ctx->saved_data[\"segments\"].toInt();\n\
-            return {torch::Tensor(), " + getKernelName(cNode) + "_call(input_dense, offset_graph, columns_graph, value_graph, bounds, nrows, segments), torch::Tensor()};";
-                } else
-                {
-                    autoGradFunction += "\
-            return {torch::Tensor(), " + getKernelName(cNode) + "_call(input_dense, offset_graph, columns_graph,\n\
-                                       value_graph), torch::Tensor()};\n";
-                }
-        autoGradFunction += "\
-        }\n\
-    };";
-            kernelCallCode.addCode(autoGradFunction);
+                    if (isColTile) {
+                        auto bounds = forwardCode->declare("torch::Tensor", "bounds", (gnn->*"global_bounds")[2 * li]);
+                        auto segments = forwardCode->declare("int", "segments", (gnn->*"global_segments")[2 * li]);
+                        forwardCode->ret(Code::callFn(getKernelName(cNode) + "_call",
+                            { input_dense, offset_graph, columns_graph, value_graph, bounds, gnn->*"global_nrows", segments }));
+                    } else {
+                        forwardCode->ret(Code::callFn(getKernelName(cNode) + "_call",
+                            { input_dense, offset_graph, columns_graph, value_graph }));
+                    }
+
+                    FunctionBuilder *kernelBackward = kernel->addMethod("backward", "torch::autograd::tensor_list", true);
+                    auto bctx = kernelBackward->addArgument("torch::autograd::AutogradContext*", "ctx");
+                    kernelBackward->addArgument("torch::autograd::tensor_list", "grad_outputs");
+                    auto kernelBackwardCode = kernelBackward->getCode();
+
+                    auto dZ = kernelBackwardCode->declare("torch::Tensor", "dZ", "grad_outputs[0]");
+                    auto saved = kernelBackwardCode->declare("auto", "saved", Code::callMethodPtr(bctx, "get_saved_variables"));
+                    auto back_offset_graph = kernelBackwardCode->declare("torch::Tensor", "offset_graph", saved + "[0]");
+                    auto back_columns_graph = kernelBackwardCode->declare("torch::Tensor", "columns_graph", saved + "[1]");
+                    auto back_value_graph = kernelBackwardCode->declare("torch::Tensor", "value_graph", saved + "[2]");
+                    auto back_nrows = kernelBackwardCode->declare("int", "nrows", bctx + "->saved_data[\"nrows\"].toInt()");
+
+                    if (isColTile) {
+                        auto back_bounds = kernelBackwardCode->declare("torch::Tensor", "bounds", saved + "[3]");
+                        auto back_segments = kernelBackwardCode->declare("int", "segments", bctx + "->saved_data[\"segments\"].toInt()");
+                        auto res = kernelBackwardCode->declare("torch::Tensor", "res",
+                            Code::callFn(getKernelName(cNode) + "_call",
+                                { dZ, back_offset_graph, back_columns_graph, back_value_graph, back_bounds, back_nrows, back_segments }));
+                        kernelBackwardCode->ret(Code::vec({ "torch::Tensor()", res, "torch::Tensor()" }));
+                    } else {
+                        auto res = kernelBackwardCode->declare("torch::Tensor", "res",
+                            Code::callFn(getKernelName(cNode) + "_call",
+                                { dZ, back_offset_graph, back_columns_graph, back_value_graph }));
+                        kernelBackwardCode->ret(Code::vec({ "torch::Tensor()", res, "torch::Tensor()" }));
+                    }
+
+                    kernels.push_back(kernel);
                 }
                 if (outOfLoop)
                 {
