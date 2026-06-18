@@ -11,7 +11,7 @@
 class CUDAGenerator : public CodeGenerator
 {
 public:
-    CUDAGenerator(GALAContext* context, std::string& outputPath) : CodeGenerator(context, outputPath)
+    CUDAGenerator(GALAContext* context, std::string& outputPath, std::string dataRoot) : CodeGenerator(context, outputPath, dataRoot)
     {
     }
 
@@ -48,7 +48,10 @@ public:
             "add_compile_definitions(GN_1)\n"
             "add_compile_definitions(PT_0)\n"
             "add_compile_definitions(ST_0)\n"
-            "add_compile_definitions(A_ALLOC)";
+            "add_compile_definitions(A_ALLOC)\n"
+            "include_directories(" GALA_SRC_ROOT "/include)\n"
+            "include_directories(" GALA_SRC_ROOT "/src)\n"
+            "include_directories(" GALA_SRC_ROOT "/tests)";
         std::string cmakeExecutable = "add_executable(gala_model gala.cu)\n"
             "target_compile_features(gala_model PRIVATE cxx_std_14)";
         cmakeCode.addCode(cmakeCudaBase);
@@ -77,6 +80,7 @@ public:
         }
 
         res += "    cudaStreamCreate(&stream" + std::to_string(cFact) + ");\n";
+        res += "    streams.push_back(stream" + std::to_string(cFact) + ");\n";
 
         if (prevLayer == -1)
         {
@@ -445,10 +449,9 @@ C[((((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) * dcols +\n\
                    torch::Tensor value_graph\n";
             if (isColTile)
             {
-                aggrKernelCall += ", torch::Tensor bounds,\n int segments";
+                aggrKernelCall += ", torch::Tensor bounds,\n int nrows, int segments";
             }
             aggrKernelCall += ") {\n\
-auto nrows = global_nrows;\n\
 auto nvals = columns_graph.numel();\n\
 auto full_iden = input_dense.numel();\n\
 auto dcols = full_iden / nrows;\n\
@@ -467,6 +470,7 @@ int *offset_ptr = offset_graph.data_ptr<int>();\n\
 int *col_ptr = columns_graph.data_ptr<int>();\n\
 float *val_ptr = value_graph.data_ptr<float>();\n";
 
+            aggrKernelCall += "std::vector<cudaStream_t> streams;\n";
             if (isColTile)
             {
                 aggrKernelCall += "int *bounds_ptr = bounds.data_ptr<int>();\n\
@@ -495,7 +499,9 @@ int start_vals = 0;";
             {
                 aggrKernelCall += "}";
             }
-            aggrKernelCall += "return output_dense;\n\
+            aggrKernelCall += "for (auto& s : streams) { cudaStreamSynchronize(s); }\n\
+for (auto& s : streams) { cudaStreamDestroy(s); }\n\
+return output_dense;\n\
 }";
             // Adding the kernel call and setting the name
             kernelCallCode.addCode(aggrKernelCall);
@@ -580,21 +586,24 @@ default_function_kernel_mult_sddvv_undir(\n\
   int *col_ptr = columns_graph.data_ptr<int>();\n\
   float *val_ptr = value_graph.data_ptr<float>();\n\
   int *bounds_ptr = bounds.data_ptr<int>();\n\
+  std::vector<cudaStream_t> streams;\n\
 \n\
   for (int i = 0; i < segments; i++) {\n\
     int i1 = i;\n\
     int start_vals = bounds_ptr[i1 * 2];\n\
 \n\
-    cudaStream_t stream1;\n\
-\n\
-    cudaStreamCreate(&stream1);\n\
+    cudaStream_t stream;\n\
+    cudaStreamCreate(&stream);\n\
+    streams.push_back(stream);\n\
     dim3 gridDim_rem(((int)(nrows - 1) / 32) + 1);\n\
     dim3 blockDim_rem(32);\n\
     default_function_kernel_spmm_backward_sddmm_32_nln<<<gridDim_rem, blockDim_rem,\n\
-                                                     0, stream1>>>(\n\
+                                                     0, stream>>>(\n\
         oden_array, &offset_ptr[i1 * (nrows + 1)], &val_ptr[start_vals],\n\
         &col_ptr[start_vals], nrows);\n\
   }\n\
+  for (auto& s : streams) { cudaStreamSynchronize(s); }\n\
+  for (auto& s : streams) { cudaStreamDestroy(s); }\n\
 \n\
   return output_dense;\n\
 }\n\
@@ -610,20 +619,24 @@ torch::Tensor inplace_softmax_sddvv(torch::Tensor row_val,\n\
     int *col_ptr = columns_graph.data_ptr<int>();\n\
     float *val_ptr = value_graph.data_ptr<float>();\n\
     int *bounds_ptr = bounds.data_ptr<int>();\n\
+    std::vector<cudaStream_t> streams;\n\
     for (int i = 0; i < segments; i++) {\n\
         int i1 = i;\n\
         int start_vals = bounds_ptr[i1 * 2];\n\
         // int end_vals = bounds_ptr[i1 * 2 + 1];\n\
         // int nvals = end_vals - start_vals;\n\
-        cudaStream_t stream1;\n\
-        cudaStreamCreate(&stream1);\n\
+        cudaStream_t stream;\n\
+        cudaStreamCreate(&stream);\n\
+        streams.push_back(stream);\n\
         dim3 gridDim_rem(((int)(nrows - 1) / 8) + 1);\n\
         dim3 blockDim_rem(32, 8);\n\
         default_function_kernel_softmax_sddvv_undir<<<gridDim_rem, blockDim_rem, 0,\n\
-                                                      stream1>>>(\n\
+                                                      stream>>>(\n\
             &val_ptr[start_vals], &offset_ptr[i1 * (nrows + 1)], row_val_ptr,\n\
             &col_ptr[start_vals], nrows);\n\
     }\n\
+    for (auto& s : streams) { cudaStreamSynchronize(s); }\n\
+    for (auto& s : streams) { cudaStreamDestroy(s); }\n\
     return value_graph;\n\
 }\n\
 torch::Tensor inplace_softmax_sddvv_mult(torch::Tensor row_val,\n\
@@ -638,20 +651,24 @@ torch::Tensor inplace_softmax_sddvv_mult(torch::Tensor row_val,\n\
     int *col_ptr = columns_graph.data_ptr<int>();\n\
     float *val_ptr = value_graph.data_ptr<float>();\n\
     int *bounds_ptr = bounds.data_ptr<int>();\n\
+    std::vector<cudaStream_t> streams;\n\
     for (int i = 0; i < segments; i++) {\n\
         int i1 = i;\n\
         int start_vals = bounds_ptr[i1 * 2];\n\
         // int end_vals = bounds_ptr[i1 * 2 + 1];\n\
         // int nvals = end_vals - start_vals;\n\
-        cudaStream_t stream1;\n\
-        cudaStreamCreate(&stream1);\n\
+        cudaStream_t stream;\n\
+        cudaStreamCreate(&stream);\n\
+        streams.push_back(stream);\n\
         dim3 gridDim_rem(((int)(nrows - 1) / 8) + 1);\n\
         dim3 blockDim_rem(32, 8);\n\
         default_function_kernel_mult_sddvv_undir<<<gridDim_rem, blockDim_rem, 0,\n\
-                                                   stream1>>>(\n\
+                                                   stream>>>(\n\
             &val_ptr[start_vals], &offset_ptr[i1 * (nrows + 1)], row_val_ptr,\n\
             &col_ptr[start_vals], nrows);\n\
     }\n\
+    for (auto& s : streams) { cudaStreamSynchronize(s); }\n\
+    for (auto& s : streams) { cudaStreamDestroy(s); }\n\
     return value_graph;\n\
 }";
             kernelCallCode.addCode(kernelCallCodeStr);
@@ -752,21 +769,24 @@ default_function_kernel_sddmm_mult_undir_shared(\n\
   int *col_ptr = columns_graph.data_ptr<int>();\n\
   float *val_ptr = value_graph.data_ptr<float>();\n\
   int *bounds_ptr = bounds.data_ptr<int>();\n\
+  std::vector<cudaStream_t> streams;\n\
 \n\
   for (int i = 0; i < segments; i++) {\n\
     int i1 = i;\n\
     int start_vals = bounds_ptr[i1 * 2];\n\
 \n\
-    cudaStream_t stream1;\n\
-\n\
-    cudaStreamCreate(&stream1);\n\
+    cudaStream_t stream;\n\
+    cudaStreamCreate(&stream);\n\
+    streams.push_back(stream);\n\
     dim3 gridDim_rem(((int)(nrows - 1) / 32) + 1);\n\
     dim3 blockDim_rem(32);\n\
     default_function_kernel_spmm_backward_sddmm_32_eaggr<<<gridDim_rem, blockDim_rem,\n\
-                                                     0, stream1>>>(\n\
+                                                     0, stream>>>(\n\
         oden_array, &offset_ptr[i1 * (nrows + 1)], &val_ptr[start_vals],\n\
         &col_ptr[start_vals], nrows);\n\
   }\n\
+  for (auto& s : streams) { cudaStreamSynchronize(s); }\n\
+  for (auto& s : streams) { cudaStreamDestroy(s); }\n\
 \n\
   return output_dense;\n\
 }\n\
@@ -791,18 +811,22 @@ torch::Tensor bounds, int nrows, int segments) {\n\
     int *col_ptr = columns_graph.data_ptr<int>();\n\
     float *val_ptr = value_graph.data_ptr<float>();\n\
     int *bounds_ptr = bounds.data_ptr<int>();\n\
+    std::vector<cudaStream_t> streams;\n\
     for (int i = 0; i < segments; i++) {\n\
         int i1 = i;\n\
         int start_vals = bounds_ptr[i1 * 2];\n\
-        cudaStream_t stream1;\n\
-        cudaStreamCreate(&stream1);\n\
+        cudaStream_t stream;\n\
+        cudaStreamCreate(&stream);\n\
+        streams.push_back(stream);\n\
         dim3 gridDim(((int)(nrows - 1) / 8) + 1);\n\
         dim3 blockDim(32, 8);\n\
         default_function_kernel_sddvv_plus_undir<<<gridDim, blockDim, 0,\n\
-                                                   stream1>>>(\n\
+                                                   stream>>>(\n\
             &oden_array[start_vals], &offset_ptr[i1 * (nrows + 1)], iden_ptr1,\n\
             iden_ptr2, &col_ptr[start_vals], nrows);\n\
     }\n\
+    for (auto& s : streams) { cudaStreamSynchronize(s); }\n\
+    for (auto& s : streams) { cudaStreamDestroy(s); }\n\
     return output_sparse;\n\
 }\n\
 torch::Tensor edge_sddmm(torch::Tensor input_dense1, torch::Tensor input_dense2,\n\
@@ -828,19 +852,23 @@ torch::Tensor bounds, int nrows, int segments) {\n\
     int *col_ptr = columns_graph.data_ptr<int>();\n\
     float *val_ptr = value_graph.data_ptr<float>();\n\
     int *bounds_ptr = bounds.data_ptr<int>();\n\
+    std::vector<cudaStream_t> streams;\n\
     for (int i = 0; i < segments; i++) {\n\
         int i1 = i;\n\
         int start_vals = bounds_ptr[i1 * 2];\n\
-        cudaStream_t stream1;\n\
-        cudaStreamCreate(&stream1);\n\
+        cudaStream_t stream;\n\
+        cudaStreamCreate(&stream);\n\
+        streams.push_back(stream);\n\
         dim3 gridDim(((int)(nrows - 1) / 8) + 1);\n\
         dim3 blockDim(32, 8);\n\
         int shared_memory_size = dcols * sizeof(float);\n\
         default_function_kernel_sddmm_mult_undir_shared<<<\n\
-            gridDim, blockDim, shared_memory_size, stream1>>>(\n\
+            gridDim, blockDim, shared_memory_size, stream>>>(\n\
             &oden_array[start_vals], &offset_ptr[i1 * (nrows + 1)], iden_ptr1,\n\
             iden_ptr2, &col_ptr[start_vals], nrows, dcols);\n\
     }\n\
+    for (auto& s : streams) { cudaStreamSynchronize(s); }\n\
+    for (auto& s : streams) { cudaStreamDestroy(s); }\n\
     return output_sparse;\n\
 }\n";
             kernelCallCode.addCode(kernelCallCodeStr);
@@ -872,9 +900,9 @@ torch::Tensor bounds, int nrows, int segments) {\n\
                                torch::Tensor offset_graph,\n\
                                torch::Tensor columns_graph,\n\
                                torch::Tensor value_graph, torch::Tensor bounds,\n\
+                               int nrows,\n\
                                int segments) {\n\
   auto nvals = columns_graph.numel();\n\
-  auto nrows = global_nrows;\n\
   auto full_iden = input_dense1.numel();\n\
   auto dcols = full_iden / nrows;\n\
   // // Dense\n\
@@ -899,20 +927,24 @@ torch::Tensor bounds, int nrows, int segments) {\n\
   // dim3 blockDim(32, 8);\n\
   // default_function_kernel_sddvv_plus<<<gridDim, blockDim, 0, stream1>>>(\n\
   //     oden_array, offset_ptr, iden_ptr1, iden_ptr2, col_ptr, nrows);\n\
+  std::vector<cudaStream_t> streams;\n\
   for (int i = 0; i < segments; i++) {\n\
     int i1 = i;\n\
     int start_vals = bounds_ptr[i1 * 2];\n\
     int end_vals = bounds_ptr[i1 * 2 + 1];\n\
     int nvals = end_vals - start_vals;\n\
-    cudaStream_t stream1, stream2, stream3;\n\
-      cudaStreamCreate(&stream1);\n\
-      dim3 gridDim(((int)(nrows - 1) / 8) + 1);\n\
-      dim3 blockDim(32, 8);\n\
-      default_function_kernel_sddvv_mult_undir<<<gridDim, blockDim, 0,\n\
-                                                 stream1>>>(\n\
-          &oden_array[start_vals], &offset_ptr[i1 * (nrows + 1)], iden_ptr1,\n\
-          iden_ptr2, &col_ptr[start_vals], nrows);\n\
+    cudaStream_t stream;\n\
+    cudaStreamCreate(&stream);\n\
+    streams.push_back(stream);\n\
+    dim3 gridDim(((int)(nrows - 1) / 8) + 1);\n\
+    dim3 blockDim(32, 8);\n\
+    default_function_kernel_sddvv_mult_undir<<<gridDim, blockDim, 0,\n\
+                                               stream>>>(\n\
+        &oden_array[start_vals], &offset_ptr[i1 * (nrows + 1)], iden_ptr1,\n\
+        iden_ptr2, &col_ptr[start_vals], nrows);\n\
   }\n\
+  for (auto& s : streams) { cudaStreamSynchronize(s); }\n\
+  for (auto& s : streams) { cudaStreamDestroy(s); }\n\
   return output_sparse;\n\
 }\n";
             kernelCallCode.addCode(kernelCallCodeStr);
@@ -920,9 +952,9 @@ torch::Tensor bounds, int nrows, int segments) {\n\
                                torch::Tensor input_dense2,\n\
                                torch::Tensor offset_graph,\n\
                                torch::Tensor columns_graph,\n\
-                               torch::Tensor value_graph) {\n\
+                               torch::Tensor value_graph,\n\
+                               int nrows) {\n\
   auto nvals = columns_graph.numel();\n\
-  auto nrows = global_nrows;\n\
   auto full_iden = input_dense1.numel();\n\
   auto dcols = full_iden / nrows;\n\
   // // Dense\n\
@@ -948,6 +980,8 @@ torch::Tensor bounds, int nrows, int segments) {\n\
                                                  stream1>>>(\n\
           oden_array, offset_ptr, iden_ptr1,\n\
           iden_ptr2, col_ptr, nrows);\n\
+      cudaStreamSynchronize(stream1);\n\
+      cudaStreamDestroy(stream1);\n\
   return output_sparse;\n\
 }\n";
             kernelCallCode.addCode(kernelCallCodeStr2);
@@ -967,12 +1001,12 @@ torch::Tensor bounds, int nrows, int segments) {\n\
             "#include <omp.h>\n"
             "#include <stdlib.h>\n"
             "#include <torch/torch.h>\n"
-            "#include \"../src/formats/csrc_matrix.h\"\n"
-            "#include \"../src/formats/dense_matrix.h\"\n"
-            "#include \"../src/ops/aggregators.h\"\n"
-            "#include \"../src/ops/tiling.h\"\n"
-            "#include \"../src/utils/mtx_io.h\"\n"
-            "#include \"../tests/common.h\"\n";
+            "#include \"formats/csrc_matrix.h\"\n"
+            "#include \"formats/dense_matrix.h\"\n"
+            "#include \"ops/aggregators.h\"\n"
+            "#include \"ops/tiling.h\"\n"
+            "#include \"utils/mtx_io.h\"\n"
+            "#include \"common.h\"\n";
         importCode.addCode(importBase);
 
 
@@ -1050,10 +1084,61 @@ int printMemoryUsage() {\n\
         }
     }
 
+    std::tuple<std::string, std::string, std::string>
+    generateCudaTransfer(bool isColTile, int indexData, std::string dataName, std::string suffix)
+    {
+        std::string t_offsets, t_cols, t_vals;
+        if (isColTile)
+        {
+            t_offsets = tensorFromBlob(model.getTransform()->getCode(),
+                                       "int",
+                                       "t_offsets"+std::to_string(indexData)+suffix,
+                                       "offset_ptr_"+dataName+suffix,
+                                       { Code::binOp("*", Code::binOp("+", "nrows", "1"), "segments_"+dataName+suffix) },
+                                       "options_cu_int");
+            t_cols = tensorFromBlob(model.getTransform()->getCode(),
+                                    "int",
+                                    "t_cols"+std::to_string(indexData)+suffix,
+                                    "col_ptr_"+dataName+suffix,
+                                    { "nvals"+std::to_string(indexData) },
+                                    "options_cu_int");
+            t_vals = tensorFromBlob(model.getTransform()->getCode(),
+                                    "float",
+                                    "t_vals"+std::to_string(indexData)+suffix,
+                                    "val_ptr_"+dataName+suffix,
+                                    { "nvals"+std::to_string(indexData) },
+                                    "options_cu_float_ngrad");
+        } else
+        {
+            t_offsets = tensorFromBlob(model.getTransform()->getCode(),
+                                       "int",
+                                       "t_offsets"+std::to_string(indexData)+suffix,
+                                       Code::callMethod("adj"+std::to_string(indexData)+suffix, "offset_ptr"),
+                                       { Code::binOp("+", "nrows", "1") },
+                                       "options_cu_int");
+            t_cols = tensorFromBlob(model.getTransform()->getCode(),
+                                       "int",
+                                       "t_cols"+std::to_string(indexData)+suffix,
+                                       Code::callMethod("adj"+std::to_string(indexData)+suffix, "ids_ptr"),
+                                       { "nvals"+std::to_string(indexData) },
+                                       "options_cu_int");
+            t_vals = tensorFromBlob(model.getTransform()->getCode(),
+                                       "float",
+                                       "t_vals"+std::to_string(indexData)+suffix,
+                                       Code::callMethod("adj"+std::to_string(indexData)+suffix, "vals_ptr"),
+                                       { "nvals"+std::to_string(indexData) },
+                                       "options_cu_float_ngrad");
+        }
+        model.getTransform()->getCode()->expr(Code::callMethod("global_offset_graph", "push_back", { t_offsets}));
+        model.getTransform()->getCode()->expr(Code::callMethod("global_columns_graph", "push_back", { t_cols }));
+        model.getTransform()->getCode()->expr(Code::callMethod("global_value_graph", "push_back", { t_vals }));
+
+        return std::tuple(t_offsets, t_cols, t_vals);
+    }
+
     void generateCudaTransferCodeForUniqueInput(ComputeNode* cNode,
         std::unordered_set<std::string> &encounteredStrings, bool &defaultLoaded)
     {
-        std::string inputTransferCode = "";
         // TODO need to the same for the backward pass' data
         // Add BOTH precode and postcode
         for (int inpI = 0; inpI < cNode->getNumInputs(); inpI++)
@@ -1089,95 +1174,18 @@ int printMemoryUsage() {\n\
                             //std::cout << dataName << " " << indexData << std::endl;
 
                             bool isColTile = hasDOpt(inputData, COL_TILE_DOPT);
-                            inputTransferCode += "  int *dA_csrOffsets"+std::to_string(indexData)+", *dA_columns"+std::to_string(indexData)+"; \n\
-        float *dA_values"+std::to_string(indexData)+";\n\
-        \n\
-        CUDA_CHECK(cudaMalloc((void **)&dA_columns"+std::to_string(indexData)+", nvals"+std::to_string(indexData)+" * sizeof(int)));\n\
-        CUDA_CHECK(cudaMalloc((void **)&dA_values"+std::to_string(indexData)+", nvals"+std::to_string(indexData)+" * sizeof(float)));\n";
-                            if (isColTile)
-                            {
-                                inputTransferCode += "\n\
-        CUDA_CHECK(cudaMalloc((void **)&dA_csrOffsets"+std::to_string(indexData)+", (nrows + 1) * segments_" + dataName + " * sizeof(int)));\n\
-        \n\
-        CUDA_CHECK(cudaMemcpy(dA_csrOffsets"+std::to_string(indexData)+", offset_ptr_" + dataName + ",\n\
-                                (nrows + 1) * segments_" + dataName + " * sizeof(int), cudaMemcpyHostToDevice));\n\
-        CUDA_CHECK(cudaMemcpy(dA_columns"+std::to_string(indexData)+", col_ptr_" + dataName + ", nvals"+std::to_string(indexData)+" * sizeof(int),\n\
-                                cudaMemcpyHostToDevice));\n\
-        CUDA_CHECK(cudaMemcpy(dA_values"+std::to_string(indexData)+", val_ptr_" + dataName + ", nvals"+std::to_string(indexData)+" * sizeof(float),\n\
-                                cudaMemcpyHostToDevice));\n\
-        torch::Tensor t_offsets"+std::to_string(indexData)+" =\n\
-            torch::from_blob(dA_csrOffsets"+std::to_string(indexData)+", {(nrows+ 1) * segments_" + dataName + "}, options_cu_int);\n";
-                            } else
-                            {
-                                inputTransferCode += "  CUDA_CHECK(cudaMalloc((void **)&dA_csrOffsets"+std::to_string(indexData)+", (nrows + 1) * sizeof(int)));\n\
-        \n\
-        CUDA_CHECK(cudaMemcpy(dA_csrOffsets"+std::to_string(indexData)+", adj"+std::to_string(indexData)+".offset_ptr(),\n\
-                                (nrows + 1) * sizeof(int), cudaMemcpyHostToDevice));\n\
-        CUDA_CHECK(cudaMemcpy(dA_columns"+std::to_string(indexData)+", adj"+std::to_string(indexData)+".ids_ptr(), nvals"+std::to_string(indexData)+" * sizeof(int),\n\
-                                cudaMemcpyHostToDevice));\n\
-        CUDA_CHECK(cudaMemcpy(dA_values"+std::to_string(indexData)+", adj"+std::to_string(indexData)+".vals_ptr(), nvals"+std::to_string(indexData)+" * sizeof(float),\n\
-                                cudaMemcpyHostToDevice));\n\
-        torch::Tensor t_offsets"+std::to_string(indexData)+" =\n\
-            torch::from_blob(dA_csrOffsets"+std::to_string(indexData)+", {nrows+ 1}, options_cu_int);\n";
-                            }
-
-                            inputTransferCode += "  torch::Tensor t_cols"+std::to_string(indexData)+" = torch::from_blob(dA_columns"+std::to_string(indexData)+", {nvals"+std::to_string(indexData)+"}, options_cu_int);\n\
-        \n\
-        torch::Tensor t_vals"+std::to_string(indexData)+" =\n\
-            torch::from_blob(dA_values"+std::to_string(indexData)+", {nvals"+std::to_string(indexData)+"}, options_cu_float_ngrad);\n";
-
-                            inputTransferCode += "  global_offset_graph.push_back(t_offsets"+std::to_string(indexData)+");\n\
-        global_columns_graph.push_back(t_cols"+std::to_string(indexData)+");\n\
-        global_value_graph.push_back(t_vals"+std::to_string(indexData)+");\n";
+                            std::string t_offsets, t_cols, t_vals;
+                            std::tie(t_offsets, t_cols, t_vals) = generateCudaTransfer(isColTile, indexData, dataName, "");
 
                             // These are graphs for backprop
                             if (!inputInfo->getDefaultDirected())
                             {
-                                inputTransferCode += "  global_offset_graph.push_back(t_offsets"+std::to_string(indexData)+");\n\
-            global_columns_graph.push_back(t_cols"+std::to_string(indexData)+");\n\
-            global_value_graph.push_back(t_vals"+std::to_string(indexData)+");\n";
+                                model.getTransform()->getCode()->expr(Code::callMethod("global_offset_graph", "push_back", { t_offsets}));
+                                model.getTransform()->getCode()->expr(Code::callMethod("global_columns_graph", "push_back", { t_cols }));
+                                model.getTransform()->getCode()->expr(Code::callMethod("global_value_graph", "push_back", { t_vals }));
                             } else
                             {
-                                inputTransferCode += "  int *dA_csrOffsets"+std::to_string(indexData)+"_b, *dA_columns"+std::to_string(indexData)+"_b; \n\
-        float *dA_values"+std::to_string(indexData)+"_b;\n\
-        \n\
-        CUDA_CHECK(cudaMalloc((void **)&dA_columns"+std::to_string(indexData)+"_b, nvals"+std::to_string(indexData)+" * sizeof(int)));\n\
-        CUDA_CHECK(cudaMalloc((void **)&dA_values"+std::to_string(indexData)+"_b, nvals"+std::to_string(indexData)+" * sizeof(float)));\n";
-                            if (isColTile)
-                            {
-                                inputTransferCode += "\n\
-        CUDA_CHECK(cudaMalloc((void **)&dA_csrOffsets"+std::to_string(indexData)+"_b, (nrows + 1) * segments_" + dataName + "_b * sizeof(int)));\n\
-        \n\
-        CUDA_CHECK(cudaMemcpy(dA_csrOffsets"+std::to_string(indexData)+"_b, offset_ptr_" + dataName + "_b,\n\
-                                (nrows + 1) * segments_" + dataName + "_b * sizeof(int), cudaMemcpyHostToDevice));\n\
-        CUDA_CHECK(cudaMemcpy(dA_columns"+std::to_string(indexData)+"_b, col_ptr_" + dataName + "_b, nvals"+std::to_string(indexData)+" * sizeof(int),\n\
-                                cudaMemcpyHostToDevice));\n\
-        CUDA_CHECK(cudaMemcpy(dA_values"+std::to_string(indexData)+"_b, val_ptr_" + dataName + "_b, nvals"+std::to_string(indexData)+" * sizeof(float),\n\
-                                cudaMemcpyHostToDevice));\n\
-        torch::Tensor t_offsets"+std::to_string(indexData)+"_b =\n\
-            torch::from_blob(dA_csrOffsets"+std::to_string(indexData)+"_b, {(nrows+ 1) * segments_" + dataName + "_b}, options_cu_int);\n";
-                            } else
-                            {
-                                inputTransferCode += "  CUDA_CHECK(cudaMalloc((void **)&dA_csrOffsets"+std::to_string(indexData)+"_b, (nrows + 1) * sizeof(int)));\n\
-        \n\
-        CUDA_CHECK(cudaMemcpy(dA_csrOffsets"+std::to_string(indexData)+"_b, adj"+std::to_string(indexData)+"_b.offset_ptr(),\n\
-                                (nrows + 1) * sizeof(int), cudaMemcpyHostToDevice));\n\
-        CUDA_CHECK(cudaMemcpy(dA_columns"+std::to_string(indexData)+"_b, adj"+std::to_string(indexData)+"_b.ids_ptr(), nvals"+std::to_string(indexData)+" * sizeof(int),\n\
-                                cudaMemcpyHostToDevice));\n\
-        CUDA_CHECK(cudaMemcpy(dA_values"+std::to_string(indexData)+"_b, adj"+std::to_string(indexData)+"_b.vals_ptr(), nvals"+std::to_string(indexData)+" * sizeof(float),\n\
-                                cudaMemcpyHostToDevice));\n\
-        torch::Tensor t_offsets"+std::to_string(indexData)+"_b =\n\
-            torch::from_blob(dA_csrOffsets"+std::to_string(indexData)+"_b, {nrows+ 1}, options_cu_int);\n";
-                            }
-
-                            inputTransferCode += "  torch::Tensor t_cols"+std::to_string(indexData)+"_b = torch::from_blob(dA_columns"+std::to_string(indexData)+"_b, {nvals"+std::to_string(indexData)+"}, options_cu_int);\n\
-        \n\
-        torch::Tensor t_vals"+std::to_string(indexData)+"_b =\n\
-            torch::from_blob(dA_values"+std::to_string(indexData)+"_b, {nvals"+std::to_string(indexData)+"}, options_cu_float_ngrad);\n";
-
-                            inputTransferCode += "  global_offset_graph.push_back(t_offsets"+std::to_string(indexData)+"_b);\n\
-        global_columns_graph.push_back(t_cols"+std::to_string(indexData)+"_b);\n\
-        global_value_graph.push_back(t_vals"+std::to_string(indexData)+"_b);\n";
+                                generateCudaTransfer(isColTile, indexData, dataName, "_b");
                             }
                         }
                     }
@@ -1208,100 +1216,22 @@ int printMemoryUsage() {\n\
                     inputInfo->setIndex(indexData);
 
                     bool isColTile = hasDOpt(inputData, COL_TILE_DOPT);
-                    inputTransferCode += "  int *dA_csrOffsets"+std::to_string(indexData)+", *dA_columns"+std::to_string(indexData)+"; \n\
-  float *dA_values"+std::to_string(indexData)+";\n\
-\n\
-  CUDA_CHECK(cudaMalloc((void **)&dA_columns"+std::to_string(indexData)+", nvals"+std::to_string(indexData)+" * sizeof(int)));\n\
-  CUDA_CHECK(cudaMalloc((void **)&dA_values"+std::to_string(indexData)+", nvals"+std::to_string(indexData)+" * sizeof(float)));\n";
-                    if (isColTile)
-                    {
-                        inputTransferCode += "\n\
-  CUDA_CHECK(cudaMalloc((void **)&dA_csrOffsets"+std::to_string(indexData)+", (nrows + 1) * segments_" + inputData->getName() + " * sizeof(int)));\n\
-\n\
-  CUDA_CHECK(cudaMemcpy(dA_csrOffsets"+std::to_string(indexData)+", offset_ptr_" + inputData->getName() + ",\n\
-                        (nrows + 1) * segments_" + inputData->getName() + " * sizeof(int), cudaMemcpyHostToDevice));\n\
-  CUDA_CHECK(cudaMemcpy(dA_columns"+std::to_string(indexData)+", col_ptr_" + inputData->getName() + ", nvals"+std::to_string(indexData)+" * sizeof(int),\n\
-                        cudaMemcpyHostToDevice));\n\
-  CUDA_CHECK(cudaMemcpy(dA_values"+std::to_string(indexData)+", val_ptr_" + inputData->getName() + ", nvals"+std::to_string(indexData)+" * sizeof(float),\n\
-                        cudaMemcpyHostToDevice));\n\
-  torch::Tensor t_offsets"+std::to_string(indexData)+" =\n\
-      torch::from_blob(dA_csrOffsets"+std::to_string(indexData)+", {(nrows+ 1) * segments_" + inputData->getName() + "}, options_cu_int);\n";
-                    } else
-                    {
-                        inputTransferCode += "  CUDA_CHECK(cudaMalloc((void **)&dA_csrOffsets"+std::to_string(indexData)+", (nrows + 1) * sizeof(int)));\n\
-\n\
-  CUDA_CHECK(cudaMemcpy(dA_csrOffsets"+std::to_string(indexData)+", adj"+std::to_string(indexData)+".offset_ptr(),\n\
-                        (nrows + 1) * sizeof(int), cudaMemcpyHostToDevice));\n\
-  CUDA_CHECK(cudaMemcpy(dA_columns"+std::to_string(indexData)+", adj"+std::to_string(indexData)+".ids_ptr(), nvals"+std::to_string(indexData)+" * sizeof(int),\n\
-                        cudaMemcpyHostToDevice));\n\
-  CUDA_CHECK(cudaMemcpy(dA_values"+std::to_string(indexData)+", adj"+std::to_string(indexData)+".vals_ptr(), nvals"+std::to_string(indexData)+" * sizeof(float),\n\
-                        cudaMemcpyHostToDevice));\n\
-  torch::Tensor t_offsets"+std::to_string(indexData)+" =\n\
-      torch::from_blob(dA_csrOffsets"+std::to_string(indexData)+", {nrows+ 1}, options_cu_int);\n";
-                    }
-
-                    inputTransferCode += "  torch::Tensor t_cols"+std::to_string(indexData)+" = torch::from_blob(dA_columns"+std::to_string(indexData)+", {nvals"+std::to_string(indexData)+"}, options_cu_int);\n\
-\n\
-  torch::Tensor t_vals"+std::to_string(indexData)+" =\n\
-      torch::from_blob(dA_values"+std::to_string(indexData)+", {nvals"+std::to_string(indexData)+"}, options_cu_float_ngrad);\n";
-
-                    inputTransferCode += "  global_offset_graph.push_back(t_offsets"+std::to_string(indexData)+");\n\
-  global_columns_graph.push_back(t_cols"+std::to_string(indexData)+");\n\
-  global_value_graph.push_back(t_vals"+std::to_string(indexData)+");\n";
+                    std::string t_offsets, t_cols, t_vals;
+                    std::tie(t_offsets, t_cols, t_vals) = generateCudaTransfer(isColTile, indexData, inputData->getName(), "");
 
                     // These are graphs for backprop
-                    if (!inputInfo->getDirected())
+                    if (!inputInfo->getDefaultDirected())
                     {
-                        inputTransferCode += "  global_offset_graph.push_back(t_offsets"+std::to_string(indexData)+");\n\
-    global_columns_graph.push_back(t_cols"+std::to_string(indexData)+");\n\
-    global_value_graph.push_back(t_vals"+std::to_string(indexData)+");\n";
+                        model.getTransform()->getCode()->expr(Code::callMethod("global_offset_graph", "push_back", { t_offsets}));
+                        model.getTransform()->getCode()->expr(Code::callMethod("global_columns_graph", "push_back", { t_cols }));
+                        model.getTransform()->getCode()->expr(Code::callMethod("global_value_graph", "push_back", { t_vals }));
                     } else
                     {
-                         inputTransferCode += "  int *dA_csrOffsets"+std::to_string(indexData)+"_b, *dA_columns"+std::to_string(indexData)+"_b; \n\
-  float *dA_values"+std::to_string(indexData)+"_b;\n\
-\n\
-  CUDA_CHECK(cudaMalloc((void **)&dA_columns"+std::to_string(indexData)+"_b, nvals"+std::to_string(indexData)+" * sizeof(int)));\n\
-  CUDA_CHECK(cudaMalloc((void **)&dA_values"+std::to_string(indexData)+"_b, nvals"+std::to_string(indexData)+" * sizeof(float)));\n";
-                    if (isColTile)
-                    {
-                        inputTransferCode += "\n\
-  CUDA_CHECK(cudaMalloc((void **)&dA_csrOffsets"+std::to_string(indexData)+"_b, (nrows + 1) * segments_" + inputData->getName() + "_b * sizeof(int)));\n\
-\n\
-  CUDA_CHECK(cudaMemcpy(dA_csrOffsets"+std::to_string(indexData)+"_b, offset_ptr_" + inputData->getName() + "_b,\n\
-                        (nrows + 1) * segments_" + inputData->getName() + "_b * sizeof(int), cudaMemcpyHostToDevice));\n\
-  CUDA_CHECK(cudaMemcpy(dA_columns"+std::to_string(indexData)+"_b, col_ptr_" + inputData->getName() + "_b, nvals"+std::to_string(indexData)+" * sizeof(int),\n\
-                        cudaMemcpyHostToDevice));\n\
-  CUDA_CHECK(cudaMemcpy(dA_values"+std::to_string(indexData)+"_b, val_ptr_" + inputData->getName() + "_b, nvals"+std::to_string(indexData)+" * sizeof(float),\n\
-                        cudaMemcpyHostToDevice));\n\
-  torch::Tensor t_offsets"+std::to_string(indexData)+"_b =\n\
-      torch::from_blob(dA_csrOffsets"+std::to_string(indexData)+"_b, {(nrows+ 1) * segments_" + inputData->getName() + "_b}, options_cu_int);\n";
-                    } else
-                    {
-                        inputTransferCode += "  CUDA_CHECK(cudaMalloc((void **)&dA_csrOffsets"+std::to_string(indexData)+"_b, (nrows + 1) * sizeof(int)));\n\
-\n\
-  CUDA_CHECK(cudaMemcpy(dA_csrOffsets"+std::to_string(indexData)+"_b, adj"+std::to_string(indexData)+"_b.offset_ptr(),\n\
-                        (nrows + 1) * sizeof(int), cudaMemcpyHostToDevice));\n\
-  CUDA_CHECK(cudaMemcpy(dA_columns"+std::to_string(indexData)+"_b, adj"+std::to_string(indexData)+"_b.ids_ptr(), nvals"+std::to_string(indexData)+" * sizeof(int),\n\
-                        cudaMemcpyHostToDevice));\n\
-  CUDA_CHECK(cudaMemcpy(dA_values"+std::to_string(indexData)+"_b, adj"+std::to_string(indexData)+"_b.vals_ptr(), nvals"+std::to_string(indexData)+" * sizeof(float),\n\
-                        cudaMemcpyHostToDevice));\n\
-  torch::Tensor t_offsets"+std::to_string(indexData)+"_b =\n\
-      torch::from_blob(dA_csrOffsets"+std::to_string(indexData)+"_b, {nrows+ 1}, options_cu_int);\n";
-                    }
-
-                    inputTransferCode += "  torch::Tensor t_cols"+std::to_string(indexData)+"_b = torch::from_blob(dA_columns"+std::to_string(indexData)+"_b, {nvals"+std::to_string(indexData)+"}, options_cu_int);\n\
-\n\
-  torch::Tensor t_vals"+std::to_string(indexData)+"_b =\n\
-      torch::from_blob(dA_values"+std::to_string(indexData)+"_b, {nvals"+std::to_string(indexData)+"}, options_cu_float_ngrad);\n";
-
-                    inputTransferCode += "  global_offset_graph.push_back(t_offsets"+std::to_string(indexData)+"_b);\n\
-  global_columns_graph.push_back(t_cols"+std::to_string(indexData)+"_b);\n\
-  global_value_graph.push_back(t_vals"+std::to_string(indexData)+"_b);\n";
+                        generateCudaTransfer(isColTile, indexData, inputData->getName(), "_b");
                     }
                 }
             }
         }
-        preCode.addCode(inputTransferCode);
     }
 
     // You don't need transfer operations if it is produced by some computation operation
@@ -1334,66 +1264,46 @@ int printMemoryUsage() {\n\
     {
         // TODO make the transfer based on the data and the transformations applied
         // Add the graph parts to a vector
-        std::string torchTypesStr = "  torch::Device device(torch::kCUDA);\n\
-  auto options_cu_int = torch::TensorOptions()\n\
-                            .dtype(torch::kInt)\n\
-                            .requires_grad(false)\n\
-                            .device(torch::kCUDA, 0);\n\
-  auto options_cu_float_grad = torch::TensorOptions()\n\
-                                   .dtype(torch::kFloat)\n\
-                                   .requires_grad(true)\n\
-                                   .device(torch::kCUDA, 0);\n\
-  auto options_cu_float_ngrad = torch::TensorOptions()\n\
-                                    .dtype(torch::kFloat)\n\
-                                    .requires_grad(false)\n\
-                                    .device(torch::kCUDA, 0);\n\
-  auto options_cu_bool = torch::TensorOptions()\n\
-                             .dtype(torch::kBool)\n\
-                             .requires_grad(false)\n\
-                             .device(torch::kCUDA, 0);\n\
-  auto options_cu_long =\n\
-      torch::TensorOptions().dtype(torch::kLong).device(torch::kCUDA, 0);\n";
-        preCode.addCode(torchTypesStr);
+        mainBuilder.getCode()->declare_cstr_init("torch::Device", "device", "torch::kCUDA");
+        importCode.declare("const torch::TensorOptions", "options_cu_int", "torch::TensorOptions().dtype(torch::kInt).requires_grad(false).device(torch::kCUDA, 0)");
+        importCode.declare("const torch::TensorOptions", "options_cu_float_grad", "torch::TensorOptions().dtype(torch::kFloat).requires_grad(true).device(torch::kCUDA, 0)");
+        importCode.declare("const torch::TensorOptions", "options_cu_float_ngrad", "torch::TensorOptions().dtype(torch::kFloat).requires_grad(false).device(torch::kCUDA, 0)");
+        importCode.declare("const torch::TensorOptions", "options_cu_bool", "torch::TensorOptions().dtype(torch::kBool).requires_grad(false).device(torch::kCUDA, 0)");
+        importCode.declare("const torch::TensorOptions", "options_cu_long", "torch::TensorOptions().dtype(torch::kLong).device(torch::kCUDA, 0)");
 
         // For now there's no slicing for a dense input so just use a hard-coded code-generation.
-        std::string labelMaskStr = "int *dL;\n\
-  float *dB;\n\
-  bool *d_train_mask, *d_valid_mask, *d_test_mask;\n\
-\n\
-  CUDA_CHECK(cudaMalloc((void **)&dB, (nrows * emb_size) * sizeof(float)));\n\
-  CUDA_CHECK(cudaMalloc((void **)&dL, nrows * sizeof(long)));\n\
-  CUDA_CHECK(cudaMalloc((void **)&d_train_mask, nrows * sizeof(bool)));\n\
-  CUDA_CHECK(cudaMalloc((void **)&d_valid_mask, nrows * sizeof(bool)));\n\
-  CUDA_CHECK(cudaMalloc((void **)&d_test_mask, nrows * sizeof(bool)));\n\
-\n\
-  CUDA_CHECK(cudaMemcpy(dB, input_emb.vals_ptr(),\n\
-                        (nrows * emb_size) * sizeof(float),\n\
-                        cudaMemcpyHostToDevice));\n\
-  CUDA_CHECK(cudaMemcpy(dL, labels.vals_ptr(), nrows * sizeof(long),\n\
-                        cudaMemcpyHostToDevice));\n\
-  CUDA_CHECK(cudaMemcpy(d_train_mask, train_mask.vals_ptr(),\n\
-                        nrows * sizeof(bool), cudaMemcpyHostToDevice));\n\
-  CUDA_CHECK(cudaMemcpy(d_valid_mask, valid_mask.vals_ptr(),\n\
-                        nrows * sizeof(bool), cudaMemcpyHostToDevice));\n\
-  CUDA_CHECK(cudaMemcpy(d_test_mask, test_mask.vals_ptr(), nrows * sizeof(bool),\n\
-                        cudaMemcpyHostToDevice));\n\
-\n\
-  torch::Tensor t_iden =\n\
-      torch::from_blob(dB, {nrows, emb_size}, options_cu_float_grad);\n\
-  torch::Tensor t_labs = torch::from_blob(dL, {nrows}, options_cu_long);\n\
-\n\
-  torch::Tensor t_train_mask =\n\
-      torch::from_blob(d_train_mask, {nrows}, options_cu_bool);\n\
-  torch::Tensor t_valid_mask =\n\
-      torch::from_blob(d_valid_mask, {nrows}, options_cu_bool);\n\
-  torch::Tensor t_test_mask =\n\
-      torch::from_blob(d_test_mask, {nrows}, options_cu_bool);";
-        preCode.addCode(labelMaskStr);
+        auto t_iden       = tensorFromBlob(mainBuilder.getCode(), "float", "t_iden", Code::callMethod("input_emb", "vals_ptr"), { "nrows", "emb_size" }, "options_cu_float_grad");
+        auto t_labs       = tensorFromBlob(mainBuilder.getCode(), "long", "t_labs", Code::callMethod("labels", "vals_ptr"), { "nrows" }, "options_cu_long");
+        auto t_train_mask = tensorFromBlob(mainBuilder.getCode(), "bool", "t_train_mask", Code::callMethod("train_mask", "vals_ptr"), { "nrows" }, "options_cu_bool");
+        auto t_valid_mask = tensorFromBlob(mainBuilder.getCode(), "bool", "t_valid_mask", Code::callMethod("valid_mask", "vals_ptr"), { "nrows" }, "options_cu_bool");
+        auto t_test_mask  = tensorFromBlob(mainBuilder.getCode(), "bool", "t_test_mask", Code::callMethod("test_mask", "vals_ptr"), { "nrows" }, "options_cu_bool");
+
         cudaTransfer(program);
 
-        std::string cleanCuda = " CUDA_CHECK(cudaFree(dB));";
-        postCode.addCode(cleanCuda);
+        // std::string cleanCuda = " CUDA_CHECK(cudaFree(dB));";
+        // postCode.addCode(cleanCuda);
+    }
+private:
+    static std::string tensorFromBlob(Code *builder,
+                                        std::string type,
+                                        std::string var,
+                                        std::string blob,
+                                        std::vector<std::string> dim,
+                                        std::string options)
+    {
+        // TODO: It should be possible to simply construct a tensor and send it to device
+        // with Tensor::to(), but in quick tests this seemed to result in worse
+        // inference performance
+        builder->comment("Allocate " + var + " on device");
+        auto devPtr = builder->declare(type + "*", "dev_" + var);
+        auto size = Code::intersperse(" * ", dim) + " * sizeof(" + type + ")";
+        builder->expr(Code::callFn("CUDA_CHECK", { Code::callFn("cudaMalloc", {"(void**)&"+devPtr, size }) }));
+        builder->expr(Code::callFn("CUDA_CHECK", { Code::callFn("cudaMemcpy", {devPtr, blob, size, "cudaMemcpyHostToDevice"}) }));
+        auto from_blob = Code::callFn("torch::from_blob", { devPtr, Code::vec(dim), options });
+        auto tensor = builder->declare("torch::Tensor", var, from_blob);
+        builder->comment("");
 
+        return tensor;
     }
 };
 

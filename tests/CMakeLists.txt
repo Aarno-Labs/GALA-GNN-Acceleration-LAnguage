@@ -1,5 +1,6 @@
 
 include_directories(${CMAKE_CURRENT_BINARY_DIR} ../src/frontend)
+include_directories(${CMAKE_CURRENT_BINARY_DIR} ../include)
 
 BISON_TARGET(Parser ../src/frontend/frontend.y ${CMAKE_CURRENT_BINARY_DIR}/parser.cpp DEFINES_FILE ${CMAKE_CURRENT_BINARY_DIR}/parser.hpp)
 FLEX_TARGET(Lexer ../src/frontend/frontend.l ${CMAKE_CURRENT_BINARY_DIR}/lexer.cpp)
@@ -10,3 +11,8 @@ add_executable(gala_inference_sample gala_inference_sample.cpp ${BISON_Parser_OU
 add_executable(gala_inference_long gala_inference_long.cpp ${BISON_Parser_OUTPUTS} ${FLEX_Lexer_OUTPUTS})
 add_executable(gala_train gala_train.cpp ${BISON_Parser_OUTPUTS} ${FLEX_Lexer_OUTPUTS})
 add_executable(gala_train_memory gala_train_memory.cpp ${BISON_Parser_OUTPUTS} ${FLEX_Lexer_OUTPUTS})
+add_executable(gala_test gala_test.cpp ${BISON_Parser_OUTPUTS} ${FLEX_Lexer_OUTPUTS})
+
+foreach(target gala_inference gala_inference_sample gala_inference_long gala_train gala_train_memory gala_test)
+    target_compile_definitions(${target} PRIVATE GALA_SRC_ROOT="${CMAKE_SOURCE_DIR}")
+endforeach()

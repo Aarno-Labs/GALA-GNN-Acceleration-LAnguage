@@ -56,6 +56,7 @@ class ModelConfig {
         map<GraphTransformType, float> graph_transformations;
         map<ComputeTransformType, float> compute_transformations;
         vector<pair<DataTransformType, float>> data_transformations;
+        bool generate_main;
 
         void addGraphTransformation(GraphTransformType t, float param){
             graph_transformations[t] = param;
@@ -84,6 +85,7 @@ class ModelConfig {
             compute_transformations[SAMP_DYN_CPT] = 0;
             compute_transformations[SAMP_CPT] = 0;
             data_transformations.clear();
+            generate_main = true;
         }
         string to_string(LayerOpType t) {
             switch (t) {

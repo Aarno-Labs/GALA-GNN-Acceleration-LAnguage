@@ -1,8 +1,6 @@
 cmake_minimum_required(VERSION 3.1 FATAL_ERROR)
 project(gala_cuda LANGUAGES CUDA CXX)
 set(CMAKE_CXX_COMPILER icpx)
-set(PYBIND11_FINDPYTHON ON)
-find_package(pybind11 CONFIG REQUIRED)
 find_package(Torch REQUIRED)
 find_package(OpenMP)
 if (OPENMP_FOUND)
