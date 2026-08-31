@@ -1,0 +1,34 @@
+// GCNAE: unsupervised GCN autoencoder for vertex nomination (PyGOD GAE(recon_s=False)).
+// 2 encoder + 2 decoder GCN layers; MSE feature reconstruction; per-node score = row MSE.
+G = load_dataset("Cora");
+
+aggrFn = dsl.get_aggregate(fn = dsl.fn.mul_sum);
+L1 = layer(G, hs, nonln_fn, aggregate_fn) {
+    deg = G.graphs.degrees();
+    norm = dsl.fn.pow(deg, -0.5);
+    res = norm * G.node.feats;
+    res = aggregate_fn(G.graphs, res); // aggregate operation
+    res = dsl.nn.ffn(res, out=hs); // weight operation
+    res = norm * res;
+    G.node.feats = nonln_fn(res);
+}
+
+M1 = model(G, non_ln) {
+  l1 = L1(G, 64, non_ln, aggrFn);
+  l2 = L1(l1, 64, null, aggrFn);
+  l3 = L1(l2, 64, non_ln, aggrFn);
+  l4 = L1(l3, G.node.feats.size(), null, aggrFn);
+}
+m1 = M1(G, dsl.non_ln.ReLU);
+m1.train(iters=100, learning_rate=0.004, weight_decay=0.0, loss=dsl.nn.loss.MSE);
+res = m1.eval();
+
+#schedule
+G=G.is_sparser(true);
+G=G.set_undirected(true);
+G=G.set_unweighted(true);
+operator_reordering(false);
+feature_size(1433);
+label_size(7);
+aggrFn=aggrFn.coarsen(2);
+G=G.col_tile(100000);

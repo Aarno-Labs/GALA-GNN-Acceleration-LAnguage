@@ -56,7 +56,7 @@ bool print_accuracy = false;
 %token<sval> TR FA OP_REORD SPARSE_REWRITES TRAIN_SUBGRAPH TRAIN_CODE_MOTION;
 %token<sval> PLUS MINUS MULTIPLY DIVIDE PRINT_ACC PRINT_MEM EDGEFN
 %token<sval> FFN NULL_KEY EDGE_AGGR_INIT SUM EDGE_ATTR VAL_ATTR AGGRFN FILEPATH
-%token<sval> LOSS OPTIMIZER RMSE_LOSS ADAM_T DSL_FN RELAXNLN QUANT RABBIT_REORDER_OP SAMPLE_RANDOM_OP AGGR LSQBRA RSQBRA IF ELSE DO WHILE NOT AND OR NOTEQ EQ GREATER LESS GREATEREQ LESSEQ DATASET NONLN SENSEI_OP INT NEW
+%token<sval> LOSS OPTIMIZER RMSE_LOSS MSE_LOSS ADAM_T DSL_FN RELAXNLN QUANT RABBIT_REORDER_OP SAMPLE_RANDOM_OP AGGR LSQBRA RSQBRA IF ELSE DO WHILE NOT AND OR NOTEQ EQ GREATER LESS GREATEREQ LESSEQ DATASET NONLN SENSEI_OP INT NEW
 
 %type <ival> bool op arg args
 %type <ltype> function update_op gnn_op
@@ -360,7 +360,10 @@ data_var : IDENTIFIER
     }
     | data_var DOT SIZE_FN LPAREN RPAREN
     {
-        $$ = strdup("size");
+        // Preserve the base attribute so layer widths like G.labels.size()
+        // and G.node.feats.size() are distinguishable in arg lists.
+        std::string sized = std::string("size_") + $1;
+        $$ = strdup(sized.c_str());
         free($1);
     }
     | data_var DOT DEGREE_ATTR LPAREN RPAREN
@@ -421,6 +424,10 @@ train_arg : ITERS ASSIGN INTEGER
     { m1.learning_rate = atof($3); free($3); }
     | LEARNING_RATE ASSIGN FLOAT COMMA
     { m1.learning_rate = atof($3); free($3); }
+    | LOSS ASSIGN MSE_LOSS
+    { m1.loss_fn = MSE; }
+    | LOSS ASSIGN MSE_LOSS COMMA
+    { m1.loss_fn = MSE; }
 ;
 args : { $$ = 0; }
     | args arg {
@@ -437,7 +444,13 @@ arg : INTEGER COMMA { m1.output_input_classes.push_back(atof($1)); } | INTEGER
     | NULL_KEY COMMA { $$ = 1;} | NULL_KEY {
         $$ = 1; // if arg == 1 then no nonln in this layer
     } // not matching if its same arg number as nonln, but for now its okay
-    | data_var COMMA { } | data_var {}
+    | data_var COMMA {
+        if (std::string($1) == "size_label") m1.output_input_classes.push_back(-3);
+        else if (std::string($1) == "size_feats") m1.output_input_classes.push_back(-2);
+    } | data_var {
+        if (std::string($1) == "size_label") m1.output_input_classes.push_back(-3);
+        else if (std::string($1) == "size_feats") m1.output_input_classes.push_back(-2);
+    }
     | DSL_DOT RELU { $$ = 0; } | DSL_DOT RELU COMMA  { $$ = 0; }
     | AGGRFN {} | AGGRFN COMMA {}
     | EDGEFN {} | EDGEFN COMMA {}
@@ -547,11 +560,29 @@ DataNode* addNormalization_CIR(DataNode* prevData, TrainingLoopNode* trainingLoo
 	GALAFEContext::dependencies.push_back(powerOpDegreesDependency);
     return normData;
 }
+// Per-layer width resolution. output_input_classes holds one entry per layer:
+// a positive literal, -3 for G.labels.size(), or -2 for G.node.feats.size().
+// Sentinels resolve against the schedule's label_size()/feature_size() values
+// (which are themselves -3/-2 when unset, deferring to codegen's processDims).
+int resolve_layer_dim(int v){
+    if (v == -3) return m1.graph_transformations[LABEL_SIZE];
+    if (v == -2) return m1.graph_transformations[FEAT_SIZE];
+    return v;
+}
+int layer_out_dim(int layerNum){
+    if (layerNum >= (int)m1.output_input_classes.size())
+        return m1.graph_transformations[LABEL_SIZE]; // legacy: width arg was not a literal or .size() call
+    return resolve_layer_dim(m1.output_input_classes[layerNum]);
+}
+int layer_in_dim(int layerNum){
+    if (layerNum == 0) return m1.graph_transformations[FEAT_SIZE];
+    return layer_out_dim(layerNum - 1);
+}
 DataNode* addNormCalc_CIR(DataNode* normData, DataNode* prevData, TrainingLoopNode* trainingLoop, int layerNum, bool featInput, bool sage){ // prevData is either feat or res
     if (debug == 2) cout << "normalization-calculation\n";
 	// 1st normalization calculation (or "Mean Calculation")
 	ForwardNode* normFeat1 = new ForwardNode(UPDATE_NODE, ROW_BROADCAST_OP);
-    pair<int,int> normFeat1Data_inputDim = {-1, featInput ? m1.graph_transformations[FEAT_SIZE] : m1.output_input_classes[layerNum]};
+    pair<int,int> normFeat1Data_inputDim = {-1, featInput ? m1.graph_transformations[FEAT_SIZE] : layer_in_dim(layerNum)};
     string name = sage ? "res_n" : "res";
     DataNode* normFeat1Data = createDataNode(RM_DTYPE, false, false, normFeat1Data_inputDim, true, name, INT32, INT32, F32);
 	normFeat1->addInputData(normData);
@@ -570,7 +601,7 @@ DataNode* addNormCalc_CIR(DataNode* normData, DataNode* prevData, TrainingLoopNo
 DataNode* addAggregate_CIR(DataNode* prevData, DataNode* graphData, TrainingLoopNode* trainingLoop, int layerNum, int gin, int sage){
     if (debug == 2) cout << "aggregate" << '\n';
     ForwardNode* aggregate = new ForwardNode(AGGREGATE_NODE, AGGREGATE_MUL_SUM_OP);
-    pair<int,int> outputData_inputDim = {-1, (layerNum == 0) ? m1.graph_transformations[FEAT_SIZE] : m1.output_input_classes[layerNum]};
+    pair<int,int> outputData_inputDim = {-1, layer_in_dim(layerNum)};
     DataNode* outputData = createDataNode(RM_DTYPE, false, false, outputData_inputDim, true, gin || sage ? "res_n" : "res", INT32, INT32, F32);
 
     // // TODO Temp fix
@@ -604,25 +635,8 @@ DataNode* addFFN_CIR(DataNode* prevData, TrainingLoopNode* trainingLoop, int lay
     pair<int,int> resInputDim;
     // std::cout << weightNum << " " << m1.graph_transformations[FEAT_SIZE]  << " " << m1.output_input_classes[layerNum] << " " << m1.graph_transformations[LABEL_SIZE] << std::endl;
     // std::cout << layerNum << " " << (m1.num_layers - 1) << std::endl;
-    // TODO temp patch (happens when passing labels as the param)
-    int in_out_classes;
-    if (m1.output_input_classes[layerNum] == 0){
-        in_out_classes = m1.output_input_classes[0];
-    } else {
-        in_out_classes = m1.output_input_classes[layerNum];
-    }
-    if (layerNum == 0){
-        weightInputDim = {m1.graph_transformations[FEAT_SIZE], in_out_classes};
-        resInputDim = {-1, in_out_classes};
-    }
-    else if (layerNum != (m1.num_layers - 1)){
-        weightInputDim = {in_out_classes, in_out_classes};
-        resInputDim = {-1, in_out_classes};
-    }
-    else{
-        weightInputDim = {in_out_classes, m1.graph_transformations[LABEL_SIZE]};
-        resInputDim = {-1, m1.graph_transformations[LABEL_SIZE]};
-    }
+    weightInputDim = {layer_in_dim(layerNum), layer_out_dim(layerNum)};
+    resInputDim = {-1, layer_out_dim(layerNum)};
     DataNode* weightData = createDataNode(RM_DTYPE, false, false, weightInputDim, true, weightNum, INT32, INT32, F32);
     // Res DIR
     DataNode* resData = createDataNode(RM_DTYPE, false, false, resInputDim, true, "res", INT32, INT32, F32);
@@ -645,7 +659,7 @@ DataNode* addReLU_CIR(DataNode* prevData, TrainingLoopNode* trainingLoop, int la
     if (debug == 2) cout << "relu\n";
     // ReLU operation
 	ForwardNode* reluOp = new ForwardNode(POINTWISE, NON_LNR_OP_RELU);
-    pair<int,int> reluData_inputDim = {-1, (layerNum == 0) ? m1.output_input_classes[layerNum] : m1.graph_transformations[LABEL_SIZE]};
+    pair<int,int> reluData_inputDim = {-1, layer_out_dim(layerNum)};
     DataNode* reluData = createDataNode(RM_DTYPE, false, false, reluData_inputDim, true, "res", INT32, INT32, F32);
 	reluOp->addInputData(prevData);
 	reluOp->addOutputData(reluData);
@@ -663,14 +677,8 @@ DataNode* addAttentionWeight_L(DataNode* prevData, TrainingLoopNode* trainingLoo
 	DataInfo* attenLWeightInfo = new DataInfo(CM_DTYPE);
     pair<int,int> weightInputDim;
     pair<int,int> resInputDim;
-    if (layerNum == 0){
-        weightInputDim = {m1.graph_transformations[FEAT_SIZE], m1.output_input_classes[layerNum]};
-        resInputDim = {-1, m1.output_input_classes[layerNum]};
-    }
-    else{
-        weightInputDim = {m1.output_input_classes[layerNum], m1.graph_transformations[LABEL_SIZE]};
-        resInputDim = {-1, m1.graph_transformations[LABEL_SIZE]};
-    }
+    weightInputDim = {layer_in_dim(layerNum), layer_out_dim(layerNum)};
+    resInputDim = {-1, layer_out_dim(layerNum)};
 	attenLWeightInfo->setDims(weightInputDim.first, weightInputDim.second); // -2=input embedding dimension, -3=output classes
     std::string attenLWeightName = "attenLWeight" + to_string(layerNum+1);
 	DataLevel* attenLWeightLevel = new DataLevel(attenLWeightInfo, true);
@@ -706,14 +714,8 @@ DataNode* addAttentionWeight_R(DataNode* prevData, DataNode* resData, TrainingLo
     pair<int,int> weightInputDim;
     pair<int,int> resInputDim;
 	DataInfo* attenRWeightInfo = new DataInfo(CM_DTYPE);
-    if (layerNum == 0){
-        weightInputDim = {m1.graph_transformations[FEAT_SIZE], m1.output_input_classes[layerNum]};
-        resInputDim = {-1, m1.output_input_classes[layerNum]};
-    }
-    else{
-        weightInputDim = {m1.output_input_classes[layerNum], m1.graph_transformations[LABEL_SIZE]};
-        resInputDim = {-1, m1.graph_transformations[LABEL_SIZE]};
-    }
+    weightInputDim = {layer_in_dim(layerNum), layer_out_dim(layerNum)};
+    resInputDim = {-1, layer_out_dim(layerNum)};
     std::string attenLWeightName = "attenRWeight" + to_string(layerNum+1);
 	attenRWeightInfo->setDims(weightInputDim.first, weightInputDim.second); // -2=input embedding dimension, -3=output classes
 	DataLevel* attenRWeightLevel = new DataLevel(attenRWeightInfo, true);
@@ -813,7 +815,7 @@ DataNode* add_mulScalarEPS_CIR(DataNode* featData, TrainingLoopNode* trainingLoo
     // Scalar multiply res
 	ForwardNode* scalarEps = new ForwardNode(POINTWISE, SCALAR_ADD_EPS_MULTIPLY_OP);
 	scalarEps->addParam("1"); // TODO: change this to user input instead of hardcode
-    pair<int,int> outputData_inputDim = {-1, (layerNum == 0) ? m1.graph_transformations[FEAT_SIZE] : m1.output_input_classes[layerNum]};
+    pair<int,int> outputData_inputDim = {-1, layer_in_dim(layerNum)};
     DataNode* scalarEpsData = createDataNode(RM_DTYPE, false, false, outputData_inputDim, true, "res", INT32, INT32, F32);
 	scalarEps->addInputData(featData);
 	scalarEps->addOutputData(scalarEpsData);
@@ -827,7 +829,7 @@ DataNode* add_addScalarFeats_CIR(DataNode* prevData, DataNode* aggrOutput, Train
     // Add epsilon mult and scalar mults
 	ForwardNode* normFeat = new ForwardNode(UPDATE_NODE, ADD_OP);
     /* DataNode* scalarEpsData = createDataNode(RM_DTYPE, false, false, outputData_inputDim, true, "res", INT32, INT32, F32); */
-    pair<int,int> outputData_inputDim = {-1, (layerNum == 0) ? m1.graph_transformations[FEAT_SIZE] : m1.output_input_classes[layerNum]};
+    pair<int,int> outputData_inputDim = {-1, layer_in_dim(layerNum)};
     DataNode* normFeatData = createDataNode(RM_DTYPE, false, false, outputData_inputDim, true, "res", INT32, INT32, F32);
 	normFeat->addInputData(prevData);
 	normFeat->addInputData(aggrOutput);
@@ -848,14 +850,8 @@ DataNode* add_addTwoFFN_CIR(DataNode* prevData, DataNode* featData, TrainingLoop
     
     pair<int,int> weightInputDim;
     pair<int,int> resInputDim;
-    if (layerNum == 0){
-        weightInputDim = {m1.graph_transformations[FEAT_SIZE], m1.output_input_classes[layerNum]};
-        resInputDim = {-1, m1.output_input_classes[layerNum]};
-    }
-    else{
-        weightInputDim = {m1.output_input_classes[layerNum], m1.graph_transformations[LABEL_SIZE]};
-        resInputDim = {-1, m1.graph_transformations[LABEL_SIZE]};
-    }
+    weightInputDim = {layer_in_dim(layerNum), layer_out_dim(layerNum)};
+    resInputDim = {-1, layer_out_dim(layerNum)};
     // Weight as a matrix in the DIR
     auto* weightInfo = new DataInfo(CM_DTYPE);
     weightInfo->setDims(weightInputDim.first, weightInputDim.second); // Use model config for hidden dimension
@@ -1105,7 +1101,7 @@ void generate_ir(){
     DataInfo* featInfo = dynamic_cast<DataInfo*>(featData->getData()->next());
     featInfo->setDims(-1, m1.graph_transformations[FEAT_SIZE]);
     
-    TrainingLoopNode* trainingLoop = new TrainingLoopNode(m1.iterations, CROSS_ENTROPY, ADAM, m1.validation_step, 1, m1.learning_rate, m1.weight_decay);
+    TrainingLoopNode* trainingLoop = new TrainingLoopNode(m1.iterations, m1.loss_fn, ADAM, m1.validation_step, 1, m1.learning_rate, m1.weight_decay);
     DataNode* connectNode = featData;
     for (int i = 0; i < m1.num_layers; i++){
         connectNode = addLayer(i, connectNode, graph, featData, trainingLoop); 

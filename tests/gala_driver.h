@@ -204,7 +204,10 @@ inline int gala_run(int argc, char **argv, bool apply_training_transforms, int c
 			GALATransformations::trainingInvariantCodeMotion(GALAFEContext::program, GALAFEContext::dependencies,
 				GALAFEContext::associations, GALAFEContext::transforms);
 		}
-		if (GALAFEContext::training_subgraph) {
+		// trainingSubGraph prunes the graph to train-mask-reachable nodes, which is
+		// only sound for objectives restricted to the train mask; unsupervised
+		// full-graph losses (MSE reconstruction) must see the whole graph.
+		if (GALAFEContext::training_subgraph && m1.loss_fn == CROSS_ENTROPY) {
 			GALATransformations::trainingSubGraph(GALAFEContext::program, GALAFEContext::dependencies,
 				GALAFEContext::associations, GALAFEContext::transforms);
 		}

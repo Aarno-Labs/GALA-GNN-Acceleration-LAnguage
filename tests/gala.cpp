@@ -231,7 +231,8 @@ int main(int argc, char **argv) {
 		GALATransformations::trainingInvariantCodeMotion(GALAFEContext::program, GALAFEContext::dependencies,
 			GALAFEContext::associations, GALAFEContext::transforms);
 	}
-	if (GALAFEContext::training_subgraph)
+	// Only sound for train-mask-restricted objectives (see gala_driver.h).
+	if (GALAFEContext::training_subgraph && m1.loss_fn == CROSS_ENTROPY)
 	{
 		GALATransformations::trainingSubGraph(GALAFEContext::program, GALAFEContext::dependencies,
 			GALAFEContext::associations, GALAFEContext::transforms);

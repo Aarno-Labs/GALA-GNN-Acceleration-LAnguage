@@ -3,6 +3,7 @@
 
 #include "../../src/utils/threading_utils.h"
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <iterator>
 #include <tests/common.h>
@@ -12,8 +13,10 @@
 template <typename M> class Evaluator {
 private:
   uint skip;
-  float best_val_acc;
-  float best_test_acc;
+  float best_val_acc = -1.0f;
+  float best_test_acc = 0.0f;
+  const char *val_label = "Best validation accuracy: ";
+  const char *test_label = "Test accuracy at best val: ";
   int begin_mem, end_mem;
   double begin_time, end_time;
   std::vector<double> forward_timing_starts;
@@ -61,6 +64,58 @@ public:
     test_acc = (test_correct.sum() / test.sum()).item().toFloat();
     val_acc = (validate_correct.sum() / validate.sum()).item().toFloat();
   }
+  // Switch reporting labels to vertex-nomination (AUC) terminology.
+  void use_auc_metric() {
+    val_label = "Best validation AUC: ";
+    test_label = "Eval AUC at best val: ";
+  }
+  float best_val() const { return best_val_acc; }
+  float best_test() const { return best_test_acc; }
+
+  // Rank-based ROC-AUC (Mann-Whitney U with average ranks for ties) of score
+  // against binary labels, restricted to mask. All tensors must be on CPU.
+  static float mask_auc(const torch::Tensor &score, const torch::Tensor &label,
+                        const torch::Tensor &mask) {
+    auto s = score.index({mask}).contiguous();
+    auto l = label.index({mask}).contiguous();
+    int64_t n = s.numel();
+    int64_t npos = l.sum().item().toLong();
+    int64_t nneg = n - npos;
+    if (npos == 0 || nneg == 0)
+      return std::nanf("");
+    auto order = s.argsort();
+    auto s_sorted = s.index({order}).contiguous();
+    auto l_sorted = l.index({order}).contiguous();
+    float *sv = s_sorted.data_ptr<float>();
+    long *lv = l_sorted.data_ptr<long>();
+    double pos_rank_sum = 0;
+    int64_t i = 0;
+    while (i < n) {
+      int64_t j = i;
+      while (j + 1 < n && sv[j + 1] == sv[i])
+        j++;
+      double avg_rank = 0.5 * ((double)(i + 1) + (double)(j + 1)); // 1-based
+      for (int64_t k = i; k <= j; k++)
+        if (lv[k])
+          pos_rank_sum += avg_rank;
+      i = j + 1;
+    }
+    return (float)((pos_rank_sum - 0.5 * (double)npos * (double)(npos + 1)) /
+                   ((double)npos * (double)nneg));
+  }
+
+  // Per-epoch AUC over the train/val/eval pools from a per-node score tensor.
+  void test_auc(const torch::Tensor &score_dev, const torch::Tensor &label_dev,
+                const torch::Tensor &train_dev, const torch::Tensor &val_dev,
+                const torch::Tensor &test_dev, float &train_auc, float &val_auc,
+                float &test_auc) {
+    auto score = score_dev.detach().to(torch::kCPU);
+    auto label = label_dev.to(torch::kCPU);
+    train_auc = mask_auc(score, label, train_dev.to(torch::kCPU));
+    val_auc = mask_auc(score, label, val_dev.to(torch::kCPU));
+    test_auc = mask_auc(score, label, test_dev.to(torch::kCPU));
+  }
+
   void train_step_report(int epoch, int mod, torch::Tensor d_loss,
                          float &train_acc, float &test_acc, float &val_acc) {
 
@@ -103,8 +158,8 @@ public:
 // TOTAL             0.92      -      -           -        -               
     std::cout << std::endl 
               << ">>> Training finished in: " << (end_time - begin_time) << "s" << std::endl;
-    std::cout << "Best validation accuracy: " << best_val_acc << std::endl;
-    std::cout << "Test accuracy at best val: " << best_test_acc << std::endl;
+    std::cout << val_label << best_val_acc << std::endl;
+    std::cout << test_label << best_test_acc << std::endl;
 
     std::cout << std::endl;
     std::cout << "model_init " << begin_mem << std::endl;

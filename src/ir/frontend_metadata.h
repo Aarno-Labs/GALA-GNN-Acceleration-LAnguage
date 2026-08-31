@@ -4,6 +4,7 @@
 #include <vector>
 #include <map>
 #include <string>
+#include "compute.h"
 using namespace std;
 
 typedef enum {
@@ -50,6 +51,7 @@ class ModelConfig {
         vector<int> output_input_classes; // output of first layer fed into second layer
         int num_layers;
         int validation_step;
+        LossFunction loss_fn;
         float weight_decay;
         float learning_rate;
         float normalization_value;
@@ -72,6 +74,7 @@ class ModelConfig {
             dataset_name = "\0";
             iterations = 0;
             num_layers = 0;
+            loss_fn = CROSS_ENTROPY;
             weight_decay = 5e-4;
             learning_rate = 0.01;
             normalization_value = -1;

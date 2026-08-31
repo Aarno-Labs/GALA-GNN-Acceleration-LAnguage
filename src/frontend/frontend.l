@@ -57,6 +57,7 @@ size { return SIZE_FN; }
 non_ln.ReLU { return RELU; }
 non_ln.LeakyReLU { return LEAKY_RELU; }
 dsl.nn.loss.RMSE { return RMSE_LOSS; }
+dsl.nn.loss.MSE { return MSE_LOSS; }
 dsl.nn.optmz.ADAM { return ADAM_T; }
 DSL_Dataset { return DATASET; }
 NonLn { return NONLN; }

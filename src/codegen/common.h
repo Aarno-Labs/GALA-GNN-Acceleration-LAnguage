@@ -1633,8 +1633,12 @@ forward(torch::Tensor t_iden";
                 std::string accVarsStr = " float train_acc, test_acc, val_acc;\n";
                 model.getPreCall()->addCode(accVarsStr);
 
-                std::string eval = "Evaluator<GALAGNN> evaluator(skip_cache_warmup);\n\
-  evaluator.begin();";
+                std::string eval = "Evaluator<GALAGNN> evaluator(skip_cache_warmup);\n";
+                if (loopNode->getLossFunc() == MSE)
+                {
+                    eval += "evaluator.use_auc_metric();\n";
+                }
+                eval += "  evaluator.begin();";
                 model.getPreCall()->addCode(eval);
 
                 if (GALAFEContext::print_accuracy)
@@ -1652,12 +1656,34 @@ forward(torch::Tensor t_iden";
     torch::Tensor prediction =\n\
         net->forward(t_iden";
 
-                // Build tempTrainLoopPostCall - shared parts
+                // Build tempTrainLoopPostCall - shared prefix
                 std::string tempTrainLoopPostCall = ", epoch, mod_v)[0];\n\
     cudaDeviceSynchronize();\n\
     evaluator.end_forward();\n\
     cudaDeviceSynchronize();\n\
-    evaluator.begin_train();\n\
+    evaluator.begin_train();\n";
+
+                if (loopNode->getLossFunc() == MSE)
+                {
+                    // Unsupervised autoencoder: full-graph feature reconstruction.
+                    // No mask restriction and no gradient clipping (matches the PyGOD
+                    // GCNAE reference). The per-node mean squared reconstruction error,
+                    // taken from the same train-mode forward used for the loss and
+                    // captured before the optimizer step, is the nomination score;
+                    // ROC-AUC of that score against the binary interest labels is the
+                    // reported metric.
+                    tempTrainLoopPostCall += "\
+    torch::Tensor d_loss = torch::mse_loss(prediction, t_iden.detach());\n\
+    torch::Tensor score_ae = (prediction.detach() - t_iden.detach()).pow(2).mean(1);\n\
+    d_loss.backward();\n\
+    optimizer.step();\n\
+    cudaDeviceSynchronize();\n\
+    evaluator.end_train();\n\
+    evaluator.test_auc(score_ae, t_labs, t_train_mask, t_valid_mask, t_test_mask, train_acc, val_acc, test_acc);\n\
+        evaluator.train_step_report(epoch, " + std::to_string(GALAFEContext::log_interval) + ", d_loss, train_acc, test_acc, val_acc);\n";
+                } else
+                {
+                    tempTrainLoopPostCall += "\
     torch::Tensor prediction_train = prediction.index({t_train_mask});\n\
     torch::Tensor labels_train = t_labs.index({t_train_mask});\n\
     auto criterion = torch::nn::CrossEntropyLoss();\n\
@@ -1671,8 +1697,9 @@ forward(torch::Tensor t_iden";
     " + generateEvaluatorTestCall() + "\n\
         evaluator.train_step_report(epoch, " + std::to_string(GALAFEContext::log_interval) + ", d_loss, train_acc, test_acc, val_acc);\n\
     net->train();\n";
+                }
 
-                if (GALAFEContext::print_accuracy)
+                if (GALAFEContext::print_accuracy && loopNode->getLossFunc() != MSE)
                 {
                     tempTrainLoopPostCall += "    torch::Tensor prediction_test = prediction.index({t_test_mask});\n\
     torch::Tensor labels_test = t_labs.index({t_test_mask});\n\
@@ -1682,6 +1709,11 @@ forward(torch::Tensor t_iden";
     if (max_acc<acc){\n\
         max_acc = acc;\n\
     }\n";
+                }
+                if (GALAFEContext::print_accuracy && loopNode->getLossFunc() == MSE)
+                {
+                    // keep max_acc defined for the final print: eval AUC at best val
+                    tempTrainLoopPostCall += "    max_acc = evaluator.best_test();\n";
                 }
 
                 tempTrainLoopPostCall += "  }";
