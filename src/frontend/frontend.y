@@ -46,7 +46,7 @@ bool print_accuracy = false;
 
 %token<sval> IDENTIFIER ASSIGN LOAD;
 %token<sval> LPAREN RPAREN SEMICOLON QUOTE SET_UNWEIGHTED SET_UNDIRECTED
-%token<sval> MODEL_W EVAL TRAIN LAYER ITERS VAL_STEP 
+%token<sval> MODEL_W EVAL TRAIN LAYER ITERS VAL_STEP WEIGHT_DECAY LEARNING_RATE 
 %token<sval> AGGR_INIT FN_ARG MUL_SUM MUL_MEAN DSL_DOT FFN_OUT SIZE_FN 
 %token<sval> GRAPH_ATTR FEAT_ATTR RELU LABEL_ATTR DEGREE_ATTR NODE_ATTR LEAKY_RELU
 %token<sval> POW SCALAR_INIT IS_SPARSE SAMPLE_OPT DYNAMIC_OPT
@@ -413,6 +413,14 @@ train_arg : ITERS ASSIGN INTEGER
     { m1.validation_step = atoi($3); free($3); }
     | VAL_STEP ASSIGN INTEGER COMMA
     { m1.validation_step = atoi($3); free($3); }
+    | WEIGHT_DECAY ASSIGN FLOAT
+    { m1.weight_decay = atof($3); free($3); }
+    | WEIGHT_DECAY ASSIGN FLOAT COMMA
+    { m1.weight_decay = atof($3); free($3); }
+    | LEARNING_RATE ASSIGN FLOAT
+    { m1.learning_rate = atof($3); free($3); }
+    | LEARNING_RATE ASSIGN FLOAT COMMA
+    { m1.learning_rate = atof($3); free($3); }
 ;
 args : { $$ = 0; }
     | args arg {
@@ -1097,7 +1105,7 @@ void generate_ir(){
     DataInfo* featInfo = dynamic_cast<DataInfo*>(featData->getData()->next());
     featInfo->setDims(-1, m1.graph_transformations[FEAT_SIZE]);
     
-    TrainingLoopNode* trainingLoop = new TrainingLoopNode(m1.iterations, CROSS_ENTROPY, ADAM, m1.validation_step);
+    TrainingLoopNode* trainingLoop = new TrainingLoopNode(m1.iterations, CROSS_ENTROPY, ADAM, m1.validation_step, 1, m1.learning_rate, m1.weight_decay);
     DataNode* connectNode = featData;
     for (int i = 0; i < m1.num_layers; i++){
         connectNode = addLayer(i, connectNode, graph, featData, trainingLoop); 
