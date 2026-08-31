@@ -62,6 +62,7 @@ filesystem::path GALAFEContext::data_root;
 
 std::string GALAFEContext::opt_input = "";
 int GALAFEContext::log_interval;
+float GALAFEContext::dropout = 0.5f;
 
 //Dense matrix with double values.
 typedef DenseMatrix<ind1_t, ind2_t, val_t> DMd_t;

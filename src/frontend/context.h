@@ -36,6 +36,7 @@ class GALAFEContext {
 
 		static std::string opt_input;
 		static int log_interval;
+		static float dropout;
 };
 
 #endif //CONTEXT_H

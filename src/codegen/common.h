@@ -1293,7 +1293,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
         {
             std::string reluCall = "        " + generateOutputString(cNode, outOfLoop) + " = torch::relu(" + cNode->getInput(0)->getName() + ");";
             model.getForward()->addCode(reluCall);
-            std::string dropoutCall = "        " + generateOutputString(cNode, outOfLoop) + " = torch::dropout(" + generateOutputString(cNode, outOfLoop) + ", 0.5, this->is_training());";
+            std::string dropoutCall = "        " + generateOutputString(cNode, outOfLoop) + " = torch::dropout(" + generateOutputString(cNode, outOfLoop) + ", " + std::to_string(GALAFEContext::dropout) + ", this->is_training());";
             model.getForward()->addCode(dropoutCall);
         } else if (cNode->getOp() == NON_LNR_OP_LEAKY_RELU)
         {
@@ -1665,6 +1665,13 @@ forward(torch::Tensor t_iden";
 
                 if (loopNode->getLossFunc() == MSE)
                 {
+                    // The reconstruction target must be the RAW features:
+                    // trainingInvariantCodeMotion may hoist the first layer's
+                    // norm/aggregate transforms onto t_iden before the loop, so
+                    // capture the untransformed tensor first (emitted at the end
+                    // of preCode, which precedes the hoisted block).
+                    std::string targetCapture = "torch::Tensor t_target = t_iden;";
+                    preCode.addCode(targetCapture);
                     // Unsupervised autoencoder: full-graph feature reconstruction.
                     // No mask restriction and no gradient clipping (matches the PyGOD
                     // GCNAE reference). The per-node mean squared reconstruction error,
@@ -1673,8 +1680,8 @@ forward(torch::Tensor t_iden";
                     // ROC-AUC of that score against the binary interest labels is the
                     // reported metric.
                     tempTrainLoopPostCall += "\
-    torch::Tensor d_loss = torch::mse_loss(prediction, t_iden.detach());\n\
-    torch::Tensor score_ae = (prediction.detach() - t_iden.detach()).pow(2).mean(1);\n\
+    torch::Tensor d_loss = torch::mse_loss(prediction, t_target.detach());\n\
+    torch::Tensor score_ae = (prediction.detach() - t_target.detach()).pow(2).mean(1);\n\
     d_loss.backward();\n\
     optimizer.step();\n\
     cudaDeviceSynchronize();\n\

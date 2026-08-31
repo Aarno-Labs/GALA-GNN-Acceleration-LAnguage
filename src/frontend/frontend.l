@@ -81,6 +81,7 @@ iters { return ITERS; }
 validation_step { return VAL_STEP; }
 weight_decay { return WEIGHT_DECAY; }
 learning_rate { return LEARNING_RATE; }
+dropout { return DROPOUT_KW; }
 relax_nln { return RELAXNLN; }
 quant { return QUANT; }
 sensei_op { return SENSEI_OP; }

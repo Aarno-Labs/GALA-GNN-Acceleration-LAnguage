@@ -1,6 +1,8 @@
-// GCNAE: unsupervised GCN autoencoder for vertex nomination (PyGOD GAE(recon_s=False)).
-// 2 encoder + 2 decoder GCN layers; MSE feature reconstruction; per-node score = row MSE.
-G = load_dataset("Cora");
+// GCNAE vertex nomination on the SEI workload-49 dataset: Reddit 20% subgraph
+// with injected contextual+structural outliers (see prepare_data_vn.py).
+// Matches PyGOD GAE(recon_s=False): 2 encoder + 2 decoder GCN layers,
+// hidden 64, MSE feature reconstruction, Adam lr 4e-3 wd 0, 100 epochs.
+G = load_dataset("RedditVN20");
 
 aggrFn = dsl.get_aggregate(fn = dsl.fn.mul_sum);
 L1 = layer(G, hs, nonln_fn, aggregate_fn) {
@@ -28,7 +30,7 @@ G=G.is_sparser(true);
 G=G.set_undirected(true);
 G=G.set_unweighted(true);
 operator_reordering(false);
-feature_size(1433);
-label_size(7);
+feature_size(602);
+label_size(2);
 aggrFn=aggrFn.coarsen(2);
-G=G.col_tile(100000);
+G=G.col_tile(370000);
