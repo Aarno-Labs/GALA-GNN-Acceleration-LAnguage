@@ -12,3 +12,5 @@
 /utils/third_party/parmat/Release/src/Edge.o
 /utils/third_party/parmat/Release/src/Edge.d
 /data_schedule/
+build-1.2/
+codegen-test/

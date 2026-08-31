@@ -348,6 +348,7 @@ public:
 
                                 oNode->setInputDataNode(0, cNode->getInput(0));
                                 oNode->getOutput(0)->getDataInfo()->setDims(cNode->getInput(0)->getDataInfo()->getDimRow(), inputCols);
+
                                 // Add weight operation
                                 auto ffn = new ForwardNode(UPDATE_NODE, FFN_OP_REPEAT);
                                 // Res DIR

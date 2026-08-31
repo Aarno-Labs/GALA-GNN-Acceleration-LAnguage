@@ -1,12 +1,12 @@
 #ifndef _CSR_MATRIX_H
 #define _CSR_MATRIX_H
 
-#include "../utils/info_error.h"
-#include "../utils/mtx_sort.h"
-#include "../utils/threading_utils.h"
+#include "../../src/utils/info_error.h"
+#include "../../src/utils/mtx_sort.h"
+#include "../../src/utils/threading_utils.h"
 //#include <immintrin.h>
 // #include "matrix.h"
-#include "matrix_prop.h"
+#include "../../src/formats/matrix_prop.h"
 // #include "../operations/"
 // struct MatrixProperties;
 // template <typename I_, typename V_, template <class A> class Alloc>

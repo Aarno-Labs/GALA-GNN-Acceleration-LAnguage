@@ -15,6 +15,8 @@ bool GALAFEContext::print_memory = true;
 bool GALAFEContext::use_long = false;
 
 std::string GALAFEContext::opt_input = "";
+filesystem::path GALAFEContext::data_root;
+int GALAFEContext::log_interval = 10;
 
 ModelConfig m1;
 

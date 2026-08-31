@@ -1,8 +1,9 @@
 #!/bin/bash
+set -euo pipefail
 
 conda create -n gala python=3.11 --yes
 source ~/miniforge3/bin/activate gala # Please give the correct path to activate the env if different
-pip install torch==2.4.1 --index-url https://download.pytorch.org/whl/cu124
+pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cu128
 conda install -c dglteam/label/th24_cu124 dgl --yes
 pip install ogb
 conda install packaging --yes
@@ -10,17 +11,18 @@ conda install conda-forge::bison --yes
 conda install conda-forge::seaborn --yes
 conda install anaconda::pandas --yes
 conda install anaconda::scipy --yes
+conda install torch-geometric --yes
 cd ../../Environments
 mkdir libtorch
 cd libtorch
-wget https://download.pytorch.org/libtorch/cu126/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcu126.zip
-unzip libtorch-cxx11-abi-shared-with-deps-2.7.1+cu126.zip
+wget https://download.pytorch.org/libtorch/cu128/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcu128.zip
+unzip libtorch-cxx11-abi-shared-with-deps-2.7.1+cu128.zip
 cd ../../..
 mkdir build
 cd build
-cmake ..
+cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 ..
 make -j5
 cd ../codegen
 mkdir build
 cd build
-cmake -DCMAKE_PREFIX_PATH="$PWD/../../scripts/Environments/libtorch/libtorch" ..
+cmake -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DCMAKE_PREFIX_PATH="$PWD/../../scripts/Environments/libtorch/libtorch" ..

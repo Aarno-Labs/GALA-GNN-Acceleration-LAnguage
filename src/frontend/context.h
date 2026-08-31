@@ -13,6 +13,7 @@
 #include <map>
 #include <string>
 #include <iostream>
+#include <filesystem>
 
 
 class GALAFEContext {
@@ -22,6 +23,8 @@ class GALAFEContext {
         static std::vector<RelationEdge*> associations;
         static std::vector<TransformEdge*> transforms;
 
+        static filesystem::path data_root;
+
 		static bool operator_reordering;
 		static bool sparse_rewrites;
 		static bool training_subgraph;
@@ -29,8 +32,10 @@ class GALAFEContext {
 		static bool print_memory;
 		static bool print_accuracy;
 		static bool use_long;
+        static bool instrument_evluator;
 
 		static std::string opt_input;
+		static int log_interval;
 };
 
 #endif //CONTEXT_H

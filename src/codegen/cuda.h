@@ -17,11 +17,19 @@ public:
 
     void initCMake() override
     {
-        std::string cmakeCudaBase = "cmake_minimum_required(VERSION 3.1 FATAL_ERROR)\n"
+        std::string cmakeCudaBase = "cmake_minimum_required(VERSION 3.18 FATAL_ERROR)\n"
+            "set(CMAKE_CXX_COMPILER /usr/bin/g++ CACHE FILEPATH \"GALA host compiler\")\n"
+            "set(CMAKE_CUDA_HOST_COMPILER /usr/bin/g++ CACHE FILEPATH \"GALA CUDA host compiler\")\n"
             "project(gala_cuda LANGUAGES CUDA CXX)\n"
-            "set(CMAKE_CXX_COMPILER icpx)\n"
+            "set(CMAKE_CXX_STANDARD 17)\n"
+            "set(CMAKE_CUDA_STANDARD 17)\n"
             "find_package(Torch REQUIRED)\n"
             "find_package(OpenMP)\n"
+            "if (NOT DEFINED GALA)\n"
+            "  set(GALA \"${PROJECT_SOURCE_DIR}/..\")\n"
+            "endif()\n"
+            "message(\"GALA Sources at ${GALA}\")\n"
+            "include_directories(\"${GALA}/include\")\n"
             "if (OPENMP_FOUND)\n"
             "    set(OpenMP_CXX_FLAGS \"-fopenmp\")\n"
             "    set(CMAKE_CXX_FLAGS \"${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}\")\n"
@@ -31,7 +39,8 @@ public:
             "endif ()\n"
             "include_directories(${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})\n"
             "link_libraries(\"${TORCH_LIBRARIES}\" cudart cusparse)\n"
-            "set(CMAKE_CXX_FLAGS \"${CMAKE_CXX_FLAGS} -qopt-report=0  -march=native -xCORE-AVX512 -O3 -DICC -restrict\")\n"
+            "set(CMAKE_CXX_FLAGS \"${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS} -march=x86-64 -O3 -DICC\")\n"
+            "set(CMAKE_CUDA_FLAGS \"${CMAKE_CUDA_FLAGS} -Xcompiler=-fopenmp -Xcompiler=-march=x86-64 -O3\")\n"
             "set(CMAKE_EXE_LINKER_FLAGS \"${CMAKE_EXE_LINKER_FLAGS} -Wl,--no-as-needed -lpthread -lm -ldl\")\n"
             "set(CMAKE_CXX_STANDARD_LIBRARIES \"${CMAKE_CXX_STANDARD_LIBRARIES} -lnuma\")\n"
             "if (CMAKE_CXX_COMPILER_ID STREQUAL GNU)\n"
@@ -43,16 +52,13 @@ public:
             "endif ()\n"
             "include_directories(${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES})\n"
             "link_libraries(\"${TORCH_LIBRARIES}\" cudart cusparse)\n"
-            "add_compile_options(-Xcompiler -fopenmp -march=native -O3)\n"
             "add_compile_definitions(GALA_TORCH)\n"
             "add_compile_definitions(GN_1)\n"
             "add_compile_definitions(PT_0)\n"
             "add_compile_definitions(ST_0)\n"
-            "add_compile_definitions(A_ALLOC)\n"
-            "include_directories(" GALA_SRC_ROOT "/src)\n"
-            "include_directories(" GALA_SRC_ROOT "/tests)";
+            "add_compile_definitions(A_ALLOC)";
         std::string cmakeExecutable = "add_executable(gala_model gala.cu)\n"
-            "target_compile_features(gala_model PRIVATE cxx_std_14)";
+            "target_compile_features(gala_model PRIVATE cxx_std_17)";
         cmakeCode.addCode(cmakeCudaBase);
         cmakeCode.addCode(cmakeExecutable);
     }
@@ -794,7 +800,7 @@ default_function_kernel_sddmm_mult_undir_shared(\n\
     float *__restrict__ B,           // Input B\n\
     int *__restrict__ J_indices_data, int nrows, int dcols) {\n\
     extern __shared__ float shared_mem[];\n\
-    if (((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) < nrows) { // This is fine\n\
+    if (((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) < nrows) {\n\
         for (int k = threadIdx.x; k < dcols; k += 32) {\n\
             if (k < dcols) {\n\
                 shared_mem[((int)threadIdx.y) * dcols + k] =\n\
@@ -802,7 +808,7 @@ default_function_kernel_sddmm_mult_undir_shared(\n\
             }\n\
         }\n\
         __syncthreads();\n\
-        for (int j = (int)threadIdx.x; // Not fine. This should increase by 32\n\
+        for (int j = (int)threadIdx.x;\n\
              j <\n\
              (J_indptr_data[(((((int)blockIdx.x) * 8) + ((int)threadIdx.y)) + 1)] -\n\
               J_indptr_data[((((int)blockIdx.x) * 8) + ((int)threadIdx.y))]);\n\
@@ -1075,12 +1081,13 @@ torch::Tensor bounds, int nrows, int segments) {\n\
             "#include <omp.h>\n"
             "#include <stdlib.h>\n"
             "#include <torch/torch.h>\n"
-            "#include \"formats/csrc_matrix.h\"\n"
-            "#include \"formats/dense_matrix.h\"\n"
-            "#include \"ops/aggregators.h\"\n"
-            "#include \"ops/tiling.h\"\n"
-            "#include \"utils/mtx_io.h\"\n"
-            "#include \"common.h\"\n";
+            "#include <formats/csrc_matrix.h>\n"
+            "#include <formats/dense_matrix.h>\n"
+            "#include <ops/aggregators.h>\n"
+            "#include <ops/tiling.h>\n"
+            "#include <utils/mtx_io.h>\n"
+            "#include <tests/common.h>\n"
+            "#include <codegen/evaluator.h>\n";
         importCode.addCode(importBase);
 
 
