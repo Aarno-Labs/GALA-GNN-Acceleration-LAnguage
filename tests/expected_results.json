@@ -526,5 +526,11 @@
       95.6483
     ],
     "min_accuracy": 95.5335
+  },
+  "gcnae/RedditVN20/dev": {
+    "min_accuracy": 0.79
+  },
+  "gcnae/Cora/dev": {
+    "min_accuracy": 0.55
   }
 }

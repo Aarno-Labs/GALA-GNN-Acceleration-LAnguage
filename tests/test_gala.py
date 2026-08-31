@@ -27,7 +27,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DSL_ROOT = PROJECT_ROOT / "tests" / "GALA-DSL"
-ARCHS = ["gat", "gcn", "gin", "sage"]
+ARCHS = ["gat", "gcn", "gin", "sage", "gcnae"]
 NUM_RUNS = 5
 
 
@@ -135,18 +135,26 @@ def run_model(cmd, cwd, log_fh):
 
 
 def parse_accuracy(output):
-    """Parse accuracy from gala_model output.
+    """Parse the reported metric from gala_model output.
 
-    The final output line has the form '<mean_time>,<max_acc>'.
-    Returns the accuracy as a float, or None if not found.
+    The evaluator-based programs end with a single bare value: max test
+    accuracy (percent) for supervised models, or eval AUC at best val for
+    MSE/nomination models. Older generated programs ended with
+    '<mean_time>,<max_acc>'. Accept either, scanning from the end.
     """
     for line in reversed(output.splitlines()):
         line = line.strip()
+        if not line:
+            continue
         if "," in line:
             try:
                 return float(line.split(",")[1])
             except (ValueError, IndexError):
                 continue
+        try:
+            return float(line)
+        except ValueError:
+            continue
     return None
 
 
