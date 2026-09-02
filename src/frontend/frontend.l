@@ -55,6 +55,7 @@ dst { return DST_ATTR; }
 out= { return FFN_OUT; }
 size { return SIZE_FN; }
 non_ln.ReLU { return RELU; }
+non_ln.ELU { return ELU_T; }
 non_ln.LeakyReLU { return LEAKY_RELU; }
 dsl.nn.loss.RMSE { return RMSE_LOSS; }
 dsl.nn.loss.MSE { return MSE_LOSS; }
@@ -81,6 +82,7 @@ iters { return ITERS; }
 validation_step { return VAL_STEP; }
 weight_decay { return WEIGHT_DECAY; }
 learning_rate { return LEARNING_RATE; }
+grad_clip { return GRAD_CLIP; }
 dropout { return DROPOUT_KW; }
 relax_nln { return RELAXNLN; }
 quant { return QUANT; }

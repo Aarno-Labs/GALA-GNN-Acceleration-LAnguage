@@ -52,6 +52,7 @@ class ModelConfig {
         int num_layers;
         int validation_step;
         LossFunction loss_fn;
+        int nonln_op; // 0 = ReLU, 1 = ELU (hidden-layer nonlinearity)
         float weight_decay;
         float learning_rate;
         float normalization_value;
@@ -75,6 +76,7 @@ class ModelConfig {
             iterations = 0;
             num_layers = 0;
             loss_fn = CROSS_ENTROPY;
+            nonln_op = 0;
             weight_decay = 5e-4;
             learning_rate = 0.01;
             normalization_value = -1;

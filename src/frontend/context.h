@@ -37,6 +37,7 @@ class GALAFEContext {
 		static std::string opt_input;
 		static int log_interval;
 		static float dropout;
+		static float grad_clip;
 };
 
 #endif //CONTEXT_H

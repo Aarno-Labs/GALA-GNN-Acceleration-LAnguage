@@ -18,6 +18,9 @@ std::string GALAFEContext::opt_input = "";
 filesystem::path GALAFEContext::data_root;
 int GALAFEContext::log_interval = 10;
 float GALAFEContext::dropout = 0.5f;
+// Gradient clipping max-norm for supervised training; 0 disables (the
+// PyG baselines do not clip). Default preserves 1.1-validated behavior.
+float GALAFEContext::grad_clip = 1.0f;
 
 ModelConfig m1;
 

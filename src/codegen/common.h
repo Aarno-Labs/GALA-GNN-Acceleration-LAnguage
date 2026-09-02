@@ -1289,9 +1289,10 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 model.getForward()->addCode(rbCall);
             }
 
-        } else if (cNode->getOp() == NON_LNR_OP_RELU)
+        } else if (cNode->getOp() == NON_LNR_OP_RELU || cNode->getOp() == NON_LNR_OP_ELU)
         {
-            std::string reluCall = "        " + generateOutputString(cNode, outOfLoop) + " = torch::relu(" + cNode->getInput(0)->getName() + ");";
+            std::string fn = cNode->getOp() == NON_LNR_OP_ELU ? "torch::elu" : "torch::relu";
+            std::string reluCall = "        " + generateOutputString(cNode, outOfLoop) + " = " + fn + "(" + cNode->getInput(0)->getName() + ");";
             model.getForward()->addCode(reluCall);
             std::string dropoutCall = "        " + generateOutputString(cNode, outOfLoop) + " = torch::dropout(" + generateOutputString(cNode, outOfLoop) + ", " + std::to_string(GALAFEContext::dropout) + ", this->is_training());";
             model.getForward()->addCode(dropoutCall);
@@ -1695,8 +1696,8 @@ forward(torch::Tensor t_iden";
     torch::Tensor labels_train = t_labs.index({t_train_mask});\n\
     auto criterion = torch::nn::CrossEntropyLoss();\n\
     torch::Tensor d_loss = criterion(prediction_train, labels_train);\n\
-    d_loss.backward();\n\
-    torch::nn::utils::clip_grad_norm_(net->parameters(), 1.0);\n\
+    d_loss.backward();\n" + (GALAFEContext::grad_clip > 0 ? "\
+    torch::nn::utils::clip_grad_norm_(net->parameters(), " + std::to_string(GALAFEContext::grad_clip) + ");\n" : "") + "\
     optimizer.step();\n\
     cudaDeviceSynchronize();\n\
     evaluator.end_train();\n\

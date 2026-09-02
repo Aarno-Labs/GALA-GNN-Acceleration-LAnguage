@@ -46,9 +46,9 @@ bool print_accuracy = false;
 
 %token<sval> IDENTIFIER ASSIGN LOAD;
 %token<sval> LPAREN RPAREN SEMICOLON QUOTE SET_UNWEIGHTED SET_UNDIRECTED
-%token<sval> MODEL_W EVAL TRAIN LAYER ITERS VAL_STEP WEIGHT_DECAY LEARNING_RATE DROPOUT_KW
+%token<sval> MODEL_W EVAL TRAIN LAYER ITERS VAL_STEP WEIGHT_DECAY LEARNING_RATE GRAD_CLIP DROPOUT_KW
 %token<sval> AGGR_INIT FN_ARG MUL_SUM MUL_MEAN DSL_DOT FFN_OUT SIZE_FN 
-%token<sval> GRAPH_ATTR FEAT_ATTR RELU LABEL_ATTR DEGREE_ATTR NODE_ATTR LEAKY_RELU
+%token<sval> GRAPH_ATTR FEAT_ATTR RELU ELU_T LABEL_ATTR DEGREE_ATTR NODE_ATTR LEAKY_RELU
 %token<sval> POW SCALAR_INIT IS_SPARSE SAMPLE_OPT DYNAMIC_OPT
 %token<sval> COLTILE FEAT_SIZE_ASSIGN LABEL_SIZE_ASSIGN COARSEN SRC_ATTR DST_ATTR;
 %token<sval> INTEGER FLOAT SOFTMAX INIT_WEIGHT OPT_INPUT;
@@ -428,6 +428,10 @@ train_arg : ITERS ASSIGN INTEGER
     { GALAFEContext::dropout = atof($3); free($3); }
     | DROPOUT_KW ASSIGN FLOAT COMMA
     { GALAFEContext::dropout = atof($3); free($3); }
+    | GRAD_CLIP ASSIGN FLOAT
+    { GALAFEContext::grad_clip = atof($3); free($3); }
+    | GRAD_CLIP ASSIGN FLOAT COMMA
+    { GALAFEContext::grad_clip = atof($3); free($3); }
     | LOSS ASSIGN MSE_LOSS
     { m1.loss_fn = MSE; }
     | LOSS ASSIGN MSE_LOSS COMMA
@@ -455,7 +459,8 @@ arg : INTEGER COMMA { m1.output_input_classes.push_back(atof($1)); } | INTEGER
         if (std::string($1) == "size_label") m1.output_input_classes.push_back(-3);
         else if (std::string($1) == "size_feats") m1.output_input_classes.push_back(-2);
     }
-    | DSL_DOT RELU { $$ = 0; } | DSL_DOT RELU COMMA  { $$ = 0; }
+    | DSL_DOT RELU { m1.nonln_op = 0; $$ = 0; } | DSL_DOT RELU COMMA  { m1.nonln_op = 0; $$ = 0; }
+    | DSL_DOT ELU_T { m1.nonln_op = 1; $$ = 0; } | DSL_DOT ELU_T COMMA  { m1.nonln_op = 1; $$ = 0; }
     | AGGRFN {} | AGGRFN COMMA {}
     | EDGEFN {} | EDGEFN COMMA {}
 ;
@@ -662,7 +667,7 @@ DataNode* addFFN_CIR(DataNode* prevData, TrainingLoopNode* trainingLoop, int lay
 DataNode* addReLU_CIR(DataNode* prevData, TrainingLoopNode* trainingLoop, int layerNum){
     if (debug == 2) cout << "relu\n";
     // ReLU operation
-	ForwardNode* reluOp = new ForwardNode(POINTWISE, NON_LNR_OP_RELU);
+	ForwardNode* reluOp = new ForwardNode(POINTWISE, m1.nonln_op == 1 ? NON_LNR_OP_ELU : NON_LNR_OP_RELU);
     pair<int,int> reluData_inputDim = {-1, layer_out_dim(layerNum)};
     DataNode* reluData = createDataNode(RM_DTYPE, false, false, reluData_inputDim, true, "res", INT32, INT32, F32);
 	reluOp->addInputData(prevData);
