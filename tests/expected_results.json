@@ -532,5 +532,8 @@
   },
   "gcnae/Cora/dev": {
     "min_accuracy": 0.55
+  },
+  "gcnae/RedditVN20/cpu": {
+    "min_accuracy": 0.79
   }
 }

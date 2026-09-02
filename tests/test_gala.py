@@ -46,6 +46,14 @@ def parse_args():
         help="Path to libtorch installation",
     )
     p.add_argument(
+        "--libtorch-cpu",
+        type=Path,
+        default=None,
+        help="Path to a CPU-only libtorch installation, used for DSL programs "
+             "that select the CPU backend with target(cpu); such tests are "
+             "skipped when this is not given",
+    )
+    p.add_argument(
         "--data-root",
         type=Path,
         default=PROJECT_ROOT / "Data",
@@ -164,6 +172,13 @@ def run_test(rel_path, dsl_file, args):
     log_path = args.output_dir / rel_path.with_suffix(".log")
     build_dir = output_dir / "build"
 
+    # Programs that select the CPU backend build against a CPU-only libtorch.
+    libtorch = args.libtorch
+    if "target(cpu)" in dsl_file.read_text():
+        if args.libtorch_cpu is None:
+            return test_name, "SKIP", "target(cpu) needs --libtorch-cpu", log_path, None
+        libtorch = args.libtorch_cpu
+
     output_dir.mkdir(parents=True, exist_ok=True)
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -181,8 +196,9 @@ def run_test(rel_path, dsl_file, args):
         build_dir.mkdir(exist_ok=True)
         if not run_step(
             ["cmake", output_dir,
-             f"-DCMAKE_PREFIX_PATH={args.libtorch}",
-             f"-DGALA_SRC_ROOT={PROJECT_ROOT}"],
+             f"-DCMAKE_PREFIX_PATH={libtorch}",
+             f"-DGALA_SRC_ROOT={PROJECT_ROOT}",
+             f"-DGALA={PROJECT_ROOT}"],
             cwd=build_dir,
             log_fh=log,
         ):
@@ -238,13 +254,19 @@ def main():
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     all_results = {}
-    passed = failed = 0
+    passed = failed = skipped = 0
 
     for rel_path, dsl_file in tests:
         test_name, status, failed_step, log_path, result_data = run_test(
             rel_path, dsl_file, args
         )
         all_results[test_name] = {"status": status}
+
+        if status == "SKIP":
+            all_results[test_name]["reason"] = failed_step
+            print(f"  SKIP  {test_name}  [{failed_step}]")
+            skipped += 1
+            continue
 
         if status == "FAIL":
             all_results[test_name]["failed_step"] = failed_step
@@ -283,8 +305,8 @@ def main():
     results_path.write_text(json.dumps(all_results, indent=2))
     print(f"\nResults saved to {results_path}")
 
-    total = passed + failed
-    print(f"{total} tests: {passed} passed, {failed} failed.")
+    total = passed + failed + skipped
+    print(f"{total} tests: {passed} passed, {failed} failed, {skipped} skipped.")
     sys.exit(0 if failed == 0 else 1)
 
 
