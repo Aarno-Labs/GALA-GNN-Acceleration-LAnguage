@@ -83,6 +83,7 @@ validation_step { return VAL_STEP; }
 weight_decay { return WEIGHT_DECAY; }
 learning_rate { return LEARNING_RATE; }
 grad_clip { return GRAD_CLIP; }
+target { return TARGET; }
 dropout { return DROPOUT_KW; }
 relax_nln { return RELAXNLN; }
 quant { return QUANT; }

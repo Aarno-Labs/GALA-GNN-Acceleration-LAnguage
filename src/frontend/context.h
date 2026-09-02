@@ -38,6 +38,7 @@ class GALAFEContext {
 		static int log_interval;
 		static float dropout;
 		static float grad_clip;
+		static std::string target; // code-generation target: "cuda" (default) or "cpu"
 };
 
 #endif //CONTEXT_H

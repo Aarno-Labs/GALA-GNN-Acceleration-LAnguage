@@ -25,6 +25,7 @@ typedef int val_int_t;
 #include "../src/ir/compute.h"
 #include "../src/ir/frontend_metadata.h"
 #include "../src/codegen/cuda.h"
+#include "../src/codegen/cpu.h"
 #include "../src/codegen/common.h"
 
 // Matrix classes
@@ -189,8 +190,7 @@ inline int gala_run(int argc, char **argv, bool apply_training_transforms, int c
 				", " << GALAFEContext::transforms[i]->getNode2()->getName() << '\n';
 	}
 
-	auto ctx = new GALAContext(GPU_DEVICE, SINGLE_NODE_SINGLE);
-	auto genCode = CUDAGenerator(ctx, outputPath, dataRoot);
+	std::unique_ptr<CodeGenerator> genCode = makeCodeGenerator(GALAFEContext::target, outputPath, dataRoot);
 	if (GALAFEContext::operator_reordering) {
 		GALATransformations::complexityOperatorReordering(GALAFEContext::program, GALAFEContext::dependencies,
 			GALAFEContext::associations, GALAFEContext::transforms);
@@ -212,7 +212,7 @@ inline int gala_run(int argc, char **argv, bool apply_training_transforms, int c
 				GALAFEContext::associations, GALAFEContext::transforms);
 		}
 	}
-	genCode.writeCode(GALAFEContext::program, GALAFEContext::dependencies,
+	genCode->writeCode(GALAFEContext::program, GALAFEContext::dependencies,
 		GALAFEContext::associations, GALAFEContext::transforms);
 
 	end = get_time();

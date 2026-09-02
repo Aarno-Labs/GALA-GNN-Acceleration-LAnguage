@@ -22,6 +22,7 @@ typedef int val_int_t;
 #include "../src/ir/compute.h"
 #include "../src/ir/frontend_metadata.h"
 #include "../src/codegen/cuda.h"
+#include "../src/codegen/cpu.h"
 #include "../src/codegen/common.h"
 
 // Matrix classes
@@ -66,6 +67,7 @@ float GALAFEContext::dropout = 0.5f;
 // Gradient clipping max-norm for supervised training; 0 disables (the
 // PyG baselines do not clip). Default preserves 1.1-validated behavior.
 float GALAFEContext::grad_clip = 1.0f;
+std::string GALAFEContext::target = "cuda";
 
 //Dense matrix with double values.
 typedef DenseMatrix<ind1_t, ind2_t, val_t> DMd_t;
@@ -89,6 +91,7 @@ int main(int argc, char **argv) {
         ("log_interval", po::value<int>()->default_value(10), "log_interval")
         ("opt-input", po::value<std::string>()->default_value(""), "optional input")
         ("data-root", po::value<std::string>(), "data root")
+        ("target", po::value<std::string>()->default_value(""), "code-generation target (cuda|cpu); overrides the schedule's target() directive")
         ("script", po::value<std::string>(), "script")
         ("output", po::value<std::string>(), "output")
         ;
@@ -217,9 +220,9 @@ int main(int argc, char **argv) {
 				", " << GALAFEContext::transforms[i]->getNode2()->getName() << '\n';
 	}
 
-	auto ctx = new GALAContext(GPU_DEVICE, SINGLE_NODE_SINGLE);
+	if (vm["target"].as<std::string>() != "") GALAFEContext::target = vm["target"].as<std::string>();
 	std::string outputPathStr = outputPath.string();
-	auto genCode = CUDAGenerator(ctx, outputPathStr, GALAFEContext::data_root.string());
+	std::unique_ptr<CodeGenerator> genCode = makeCodeGenerator(GALAFEContext::target, outputPathStr, GALAFEContext::data_root.string());
 	if (GALAFEContext::operator_reordering)
 	{
 		GALATransformations::complexityOperatorReordering(GALAFEContext::program, GALAFEContext::dependencies,
@@ -241,7 +244,7 @@ int main(int argc, char **argv) {
 		GALATransformations::trainingSubGraph(GALAFEContext::program, GALAFEContext::dependencies,
 			GALAFEContext::associations, GALAFEContext::transforms);
 	}
-	genCode.writeCode(GALAFEContext::program, GALAFEContext::dependencies,
+	genCode->writeCode(GALAFEContext::program, GALAFEContext::dependencies,
 		GALAFEContext::associations, GALAFEContext::transforms);
 
 	end = get_time();

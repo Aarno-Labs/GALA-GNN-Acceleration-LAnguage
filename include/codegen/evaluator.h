@@ -4,6 +4,8 @@
 #include "../../src/utils/threading_utils.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <unistd.h>
 #include <iostream>
 #include <iterator>
 #include <tests/common.h>
@@ -24,10 +26,18 @@ private:
   std::vector<double> train_timing_starts;
   std::vector<double> train_timing_ends;
 
+// Device memory in use (MiB): GPU allocation on CUDA builds, resident set size on CPU builds.
 int gpuMemoryUsage() {
+#ifdef GALA_CUDA
   size_t freeMem, totalMem;
   cudaMemGetInfo(&freeMem, &totalMem);
   return (int)((totalMem - freeMem) / (1024 * 1024));
+#else
+  long pages = 0, rss = 0;
+  FILE *f = fopen("/proc/self/statm", "r");
+  if (f) { if (fscanf(f, "%ld %ld", &pages, &rss) != 2) rss = 0; fclose(f); }
+  return (int)(rss * (sysconf(_SC_PAGESIZE) / 1024) / 1024);
+#endif
 }
 
 public:

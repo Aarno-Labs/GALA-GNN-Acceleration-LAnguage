@@ -301,15 +301,18 @@ protected:
     std::ofstream outStreamModel;
     std::ofstream outStreamCMake;
     std::string dataRoot;
+    std::string outputPath;
 
 public:
     CodeGenerator(GALAContext* context, std::string& outputPath, std::string dataRoot)
     {
         this->context = context;
         this->dataRoot = dataRoot;
+        this->outputPath = outputPath;
         if (!this->dataRoot.empty() && this->dataRoot.back() == '/')
             this->dataRoot.pop_back();
-        this->openStream(outputPath);
+        // Streams are opened in writeCode(): the model file name is backend-specific
+        // (virtual), and virtual dispatch is not available in a base constructor.
     }
 
 
@@ -502,13 +505,7 @@ public:
                             resString += "        offset_ptr_" + dNode->getName() + ", col_ptr_" + dNode->getName() + ",\n";
                             resString += "        total_bounds_" + dNode->getName() + ".data_ptr<iT>(), segments_" + dNode->getName() + ",\n";
                             resString += "        (int)" + srcNode->getName() + ".nrows(), (int)" + srcNode->getName() + ".nvals());\n";
-                            resString += "    int *dev_perm_" + dNode->getName() + ";\n";
-                            resString += "    CUDA_CHECK(cudaMalloc((void**)&dev_perm_" + dNode->getName() + ", " + srcNode->getName() + ".nvals() * sizeof(int)));\n";
-                            resString += "    CUDA_CHECK(cudaMemcpy(dev_perm_" + dNode->getName() + ", perm_data_" + dNode->getName() + ".data(),\n";
-                            resString += "        " + srcNode->getName() + ".nvals() * sizeof(int), cudaMemcpyHostToDevice));\n";
-                            resString += "    torch::Tensor t_perm_" + dNode->getName() + " = torch::from_blob(dev_perm_" + dNode->getName() + ",\n";
-                            resString += "        {(int64_t)" + srcNode->getName() + ".nvals()},\n";
-                            resString += "        torch::TensorOptions().dtype(torch::kInt).requires_grad(false).device(torch::kCUDA, 0));\n";
+                            resString += transposePermToDevice(dNode->getName(), srcNode->getName() + ".nvals()");
                             resString += "    global_transpose_perm.push_back(t_perm_" + dNode->getName() + ");\n";
                             resString += "  }\n";
                         } else
@@ -560,13 +557,7 @@ public:
                             resString += "        offset_ptr_" + dNode->getName() + "_b, col_ptr_" + dNode->getName() + "_b,\n";
                             resString += "        total_bounds_" + dNode->getName() + "_b.data_ptr<iT>(), segments_" + dNode->getName() + "_b,\n";
                             resString += "        (int)" + srcNode->getName() + "_b.nrows(), (int)" + srcNode->getName() + "_b.nvals());\n";
-                            resString += "    int *dev_perm_" + dNode->getName() + ";\n";
-                            resString += "    CUDA_CHECK(cudaMalloc((void**)&dev_perm_" + dNode->getName() + ", " + srcNode->getName() + "_b.nvals() * sizeof(int)));\n";
-                            resString += "    CUDA_CHECK(cudaMemcpy(dev_perm_" + dNode->getName() + ", perm_data_" + dNode->getName() + ".data(),\n";
-                            resString += "        " + srcNode->getName() + "_b.nvals() * sizeof(int), cudaMemcpyHostToDevice));\n";
-                            resString += "    torch::Tensor t_perm_" + dNode->getName() + " = torch::from_blob(dev_perm_" + dNode->getName() + ",\n";
-                            resString += "        {(int64_t)" + srcNode->getName() + "_b.nvals()},\n";
-                            resString += "        torch::TensorOptions().dtype(torch::kInt).requires_grad(false).device(torch::kCUDA, 0));\n";
+                            resString += transposePermToDevice(dNode->getName(), srcNode->getName() + "_b.nvals()");
                             resString += "    global_transpose_perm.push_back(t_perm_" + dNode->getName() + ");\n";
                             resString += "  }\n";
                         }
@@ -786,7 +777,7 @@ public:\n\
                 std::string normCall = "auto options_ones_val = torch::TensorOptions()\n\
                            .dtype(torch::kFloat)\n\
                            .requires_grad(false)\n\
-                           .device(torch::kCUDA, 0);\n\
+                           " + deviceOpt() + ";\n\
                 torch::Tensor ones_val = torch::ones({global_nrows, 1}, options_ones_val);\n\
                 torch::Tensor offset_graph_ones_val = global_offset_graph[2 * 0];\n\
                 torch::Tensor columns_graph_ones_val = global_columns_graph[2 * 0];\n\
@@ -811,7 +802,7 @@ public:\n\
                 std::string normCall = "auto options_ones_val = torch::TensorOptions()\n\
                            .dtype(torch::kFloat)\n\
                            .requires_grad(false)\n\
-                           .device(torch::kCUDA, 0);\n\
+                           " + deviceOpt() + ";\n\
                 torch::Tensor ones_val = torch::ones({global_nrows, 1}, options_ones_val);\n\
                 torch::Tensor offset_graph_ones_val = global_offset_graph[2 * 0];\n\
                 torch::Tensor columns_graph_ones_val = global_columns_graph[2 * 0];\n\
@@ -869,7 +860,7 @@ public:\n\
     auto options = torch::TensorOptions()\n\
                        .dtype(torch::kFloat)\n\
                        .requires_grad(true)\n\
-                       .device(torch::kCUDA, 0);\n\
+                       " + deviceOpt() + ";\n\
     row_sum = torch::reciprocal(row_sum);\n\
     val_exp = inplace_softmax_sddvv(row_sum, offset_graph, columns_graph, \n\
                                     val_exp, bounds, global_nrows, segments);\n\
@@ -1444,7 +1435,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 std::string tempOptionsOnes = "    auto options_" + cNode->getOutput(0)->getName() +" = torch::TensorOptions()\n\
                        .dtype(torch::kFloat)\n\
                        .requires_grad(false)\n\
-                       .device(torch::kCUDA, 0);";
+                       " + deviceOpt() + ";";
                 model.getInv()->addCode(tempOptionsOnes);
 
                 std::string onesCall =  generateOutputString(cNode, outOfLoop) + " = torch::ones({" + rowDims
@@ -1456,7 +1447,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 std::string tempOptionsOnes = "    auto options_" + cNode->getOutput(0)->getName() +" = torch::TensorOptions()\n\
                        .dtype(torch::kFloat)\n\
                        .requires_grad(false)\n\
-                       .device(torch::kCUDA, 0);";
+                       " + deviceOpt() + ";";
                 model.getForward()->addCode(tempOptionsOnes);
 
                 std::string onesCall =  generateOutputString(cNode, outOfLoop) + " = torch::ones({" + rowDims
@@ -1476,7 +1467,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 std::string tempOptionsOnes = "    auto options_" + cNode->getOutput(0)->getName() +" = torch::TensorOptions()\n\
                        .dtype(torch::kFloat)\n\
                        .requires_grad(false)\n\
-                       .device(torch::kCUDA, 0);";
+                       " + deviceOpt() + ";";
                 model.getInv()->addCode(tempOptionsOnes);
 
                 std::string onesCall =  generateOutputString(cNode, outOfLoop) + " = torch::full({" + rowDims
@@ -1488,7 +1479,7 @@ edge_sddmm(dZ, X, offset_graph, columns_graph, value_graph, bounds,\n\
                 std::string tempOptionsOnes = "    auto options_" + cNode->getOutput(0)->getName() +" = torch::TensorOptions()\n\
                        .dtype(torch::kFloat)\n\
                        .requires_grad(false)\n\
-                       .device(torch::kCUDA, 0);";
+                       " + deviceOpt() + ";";
                 model.getForward()->addCode(tempOptionsOnes);
 
                 std::string onesCall =  generateOutputString(cNode, outOfLoop) + " = torch::full({" + rowDims
@@ -1652,16 +1643,16 @@ forward(torch::Tensor t_iden";
     // Reset gradients.\n\
     optimizer.zero_grad();\n\
     // Execute the model on the input data.\n\
-    cudaDeviceSynchronize();\n\
+    " + syncCall() + "\n\
     evaluator.begin_forward();\n\
     torch::Tensor prediction =\n\
         net->forward(t_iden";
 
                 // Build tempTrainLoopPostCall - shared prefix
                 std::string tempTrainLoopPostCall = ", epoch, mod_v)[0];\n\
-    cudaDeviceSynchronize();\n\
+    " + syncCall() + "\n\
     evaluator.end_forward();\n\
-    cudaDeviceSynchronize();\n\
+    " + syncCall() + "\n\
     evaluator.begin_train();\n";
 
                 if (loopNode->getLossFunc() == MSE)
@@ -1685,7 +1676,7 @@ forward(torch::Tensor t_iden";
     torch::Tensor score_ae = (prediction.detach() - t_target.detach()).pow(2).mean(1);\n\
     d_loss.backward();\n\
     optimizer.step();\n\
-    cudaDeviceSynchronize();\n\
+    " + syncCall() + "\n\
     evaluator.end_train();\n\
     evaluator.test_auc(score_ae, t_labs, t_train_mask, t_valid_mask, t_test_mask, train_acc, val_acc, test_acc);\n\
         evaluator.train_step_report(epoch, " + std::to_string(GALAFEContext::log_interval) + ", d_loss, train_acc, test_acc, val_acc);\n";
@@ -1699,7 +1690,7 @@ forward(torch::Tensor t_iden";
     d_loss.backward();\n" + (GALAFEContext::grad_clip > 0 ? "\
     torch::nn::utils::clip_grad_norm_(net->parameters(), " + std::to_string(GALAFEContext::grad_clip) + ");\n" : "") + "\
     optimizer.step();\n\
-    cudaDeviceSynchronize();\n\
+    " + syncCall() + "\n\
     evaluator.end_train();\n\
     net->eval();\n\
     " + generateEvaluatorTestCall() + "\n\
@@ -1762,7 +1753,7 @@ forward(torch::Tensor t_iden";
         std::string cmakePath = outputPath / "CMakeLists.txt";
         this->outStreamCMake = std::ofstream(cmakePath);
 
-        std::string modelPath = outputPath / "gala.cu";
+        std::string modelPath = outputPath / modelFileName();
         this->outStreamModel = std::ofstream(modelPath);
     }
 
@@ -1787,6 +1778,178 @@ forward(torch::Tensor t_iden";
             } else
             {
                 outStream << end;
+            }
+        }
+    }
+
+    // ---- Backend hooks. Defaults reproduce the CUDA backend; CPUGenerator overrides. ----
+    // Device clause appended to torch::TensorOptions chains in generated code.
+    virtual std::string deviceOpt() { return ".device(torch::kCUDA, 0)"; }
+    // Host/device synchronization statement emitted around timed regions.
+    virtual std::string syncCall() { return "cudaDeviceSynchronize();"; }
+    // Name of the generated model source file.
+    virtual std::string modelFileName() { return "gala.cu"; }
+    // Materialize the host-side transpose permutation std::vector<int> perm_data_<name>
+    // as torch::Tensor t_perm_<name> on the target device. nvalsExpr is a C++ expression.
+    virtual std::string transposePermToDevice(const std::string& name, const std::string& nvalsExpr)
+    {
+        std::string r;
+        r += "    int *dev_perm_" + name + ";\n";
+        r += "    CUDA_CHECK(cudaMalloc((void**)&dev_perm_" + name + ", " + nvalsExpr + " * sizeof(int)));\n";
+        r += "    CUDA_CHECK(cudaMemcpy(dev_perm_" + name + ", perm_data_" + name + ".data(),\n";
+        r += "        " + nvalsExpr + " * sizeof(int), cudaMemcpyHostToDevice));\n";
+        r += "    torch::Tensor t_perm_" + name + " = torch::from_blob(dev_perm_" + name + ",\n";
+        r += "        {(int64_t)" + nvalsExpr + "},\n";
+        r += "        torch::TensorOptions().dtype(torch::kInt).requires_grad(false).device(torch::kCUDA, 0));\n";
+        return r;
+    }
+    // Code that publishes graph <index> (host CSR adj<index>, or the tiled tensors of
+    // <name> when isColTile) as torch tensors t_offsets<index>/t_cols<index>/t_vals<index>
+    // (plus _b twins when directed) and pushes them into the global_* arrays.
+
+    // Default (CUDA) implementation of graphTransferCode: cudaMalloc/cudaMemcpy the CSR
+    // arrays and wrap them as CUDA tensors.
+    virtual std::string graphTransferCode(int index, const std::string& name, bool isColTile, bool directed)
+    {
+        std::string N = std::to_string(index);
+        auto one = [&](const std::string& sfx) {
+            std::string c;
+            c += "  int *dA_csrOffsets" + N + sfx + ", *dA_columns" + N + sfx + "; \n\
+  float *dA_values" + N + sfx + ";\n\
+\n\
+  CUDA_CHECK(cudaMalloc((void **)&dA_columns" + N + sfx + ", nvals" + N + " * sizeof(int)));\n\
+  CUDA_CHECK(cudaMalloc((void **)&dA_values" + N + sfx + ", nvals" + N + " * sizeof(float)));\n";
+            if (isColTile)
+            {
+                c += "\n\
+  CUDA_CHECK(cudaMalloc((void **)&dA_csrOffsets" + N + sfx + ", (nrows + 1) * segments_" + name + sfx + " * sizeof(int)));\n\
+\n\
+  CUDA_CHECK(cudaMemcpy(dA_csrOffsets" + N + sfx + ", offset_ptr_" + name + sfx + ",\n\
+                        (nrows + 1) * segments_" + name + sfx + " * sizeof(int), cudaMemcpyHostToDevice));\n\
+  CUDA_CHECK(cudaMemcpy(dA_columns" + N + sfx + ", col_ptr_" + name + sfx + ", nvals" + N + " * sizeof(int),\n\
+                        cudaMemcpyHostToDevice));\n\
+  CUDA_CHECK(cudaMemcpy(dA_values" + N + sfx + ", val_ptr_" + name + sfx + ", nvals" + N + " * sizeof(float),\n\
+                        cudaMemcpyHostToDevice));\n\
+  torch::Tensor t_offsets" + N + sfx + " =\n\
+      torch::from_blob(dA_csrOffsets" + N + sfx + ", {(nrows+ 1) * segments_" + name + sfx + "}, options_cu_int);\n";
+            } else
+            {
+                c += "  CUDA_CHECK(cudaMalloc((void **)&dA_csrOffsets" + N + sfx + ", (nrows + 1) * sizeof(int)));\n\
+\n\
+  CUDA_CHECK(cudaMemcpy(dA_csrOffsets" + N + sfx + ", adj" + N + sfx + ".offset_ptr(),\n\
+                        (nrows + 1) * sizeof(int), cudaMemcpyHostToDevice));\n\
+  CUDA_CHECK(cudaMemcpy(dA_columns" + N + sfx + ", adj" + N + sfx + ".ids_ptr(), nvals" + N + " * sizeof(int),\n\
+                        cudaMemcpyHostToDevice));\n\
+  CUDA_CHECK(cudaMemcpy(dA_values" + N + sfx + ", adj" + N + sfx + ".vals_ptr(), nvals" + N + " * sizeof(float),\n\
+                        cudaMemcpyHostToDevice));\n\
+  torch::Tensor t_offsets" + N + sfx + " =\n\
+      torch::from_blob(dA_csrOffsets" + N + sfx + ", {nrows+ 1}, options_cu_int);\n";
+            }
+            c += "  torch::Tensor t_cols" + N + sfx + " = torch::from_blob(dA_columns" + N + sfx + ", {nvals" + N + "}, options_cu_int);\n\
+\n\
+  torch::Tensor t_vals" + N + sfx + " =\n\
+      torch::from_blob(dA_values" + N + sfx + ", {nvals" + N + "}, options_cu_float_ngrad);\n";
+            c += "  global_offset_graph.push_back(t_offsets" + N + sfx + ");\n\
+  global_columns_graph.push_back(t_cols" + N + sfx + ");\n\
+  global_value_graph.push_back(t_vals" + N + sfx + ");\n";
+            return c;
+        };
+        std::string code = one("");
+        if (!directed)
+        {
+            // Undirected: the backward pass reuses the forward graph.
+            code += "  global_offset_graph.push_back(t_offsets" + N + ");\n\
+    global_columns_graph.push_back(t_cols" + N + ");\n\
+    global_value_graph.push_back(t_vals" + N + ");\n";
+        } else
+        {
+            code += one("_b");
+        }
+        return code;
+    }
+
+    // Walk the program and emit, once per distinct CSR input, the code that publishes
+    // it to the global_* arrays (forward graph at 2*li, backward graph at 2*li+1).
+    void generateTransferCodeForUniqueInput(ComputeNode* cNode,
+        std::unordered_set<std::string> &encounteredStrings, bool &defaultLoaded)
+    {
+        std::string inputTransferCode = "";
+        for (int inpI = 0; inpI < cNode->getNumInputs(); inpI++)
+        {
+            auto inputData = cNode->getInput(inpI);
+
+            if (!defaultLoaded)
+            {
+                auto inputInfo =  inputData->getDataInfo();
+                if (!(inputInfo->getIndex() <= 0)){
+                    std::string dataName;
+                    if (inputInfo->getDefaultName() == ""){
+                        dataName = inputData->getName();
+                    } else {
+                        dataName = inputInfo->getDefaultName();
+                    }
+                    if (encounteredStrings.find(dataName) == encounteredStrings.end())
+                    {
+                        if (inputInfo->getFormat() == CSR_STYPE)
+                        {
+                            defaultLoaded = true;
+                            int indexData = inputInfo->getDefaultIndex();
+                            encounteredStrings.insert(dataName);
+                            bool isColTile = hasDOpt(inputData, COL_TILE_DOPT);
+                            inputTransferCode += graphTransferCode(indexData, dataName, isColTile, inputInfo->getDefaultDirected());
+                        }
+                    }
+                }
+            }
+
+            // Check if the string has been encountered before
+            if (encounteredStrings.find(inputData->getName()) == encounteredStrings.end()) {
+                // For now only generate the transfer code for CSR type graphs
+                auto inputInfo =  inputData->getDataInfo();
+                if (inputInfo->getFormat() == CSR_STYPE && !inputInfo->getDerived())
+                {
+                    int indexData = (int)encounteredStrings.size();
+                    if (inputInfo->getIndex() != -1)
+                    {
+                        indexData = inputInfo->getIndex();
+                    }
+                    encounteredStrings.insert(inputData->getName());
+
+                    // TODO Temp fix
+                    if (inputData->getName() == "attn" || inputData->getName() == "val")
+                    {
+                        continue;
+                    }
+
+                    inputInfo->setIndex(indexData);
+                    bool isColTile = hasDOpt(inputData, COL_TILE_DOPT);
+                    inputTransferCode += graphTransferCode(indexData, inputData->getName(), isColTile, inputInfo->getDirected());
+                }
+            }
+        }
+        preCode.addCode(inputTransferCode);
+    }
+
+    void transferGraphs(std::vector<CIRNode*>& program)
+    {
+        std::unordered_set<std::string> encounteredStrings;
+        bool defaultLoaded = false;
+        for (int i = 0; i < program.size(); i++)
+        {
+            CIRNode* outNode = program[i];
+            auto oNode = dynamic_cast<ComputeNode*>(outNode);
+            if (oNode)
+            {
+                generateTransferCodeForUniqueInput(oNode, encounteredStrings, defaultLoaded);
+            } else
+            {
+                auto loopNode = dynamic_cast<TrainingLoopNode*>(outNode);
+                for (int ix = 0; ix < loopNode->getLoopNodeNum(); ix++)
+                {
+                    CIRNode* inNode = loopNode->getNode(ix);
+                    auto cNode = dynamic_cast<ComputeNode*>(inNode);
+                    generateTransferCodeForUniqueInput(cNode, encounteredStrings, defaultLoaded);
+                }
             }
         }
     }
@@ -1890,6 +2053,7 @@ std::vector<torch::Tensor> global_transpose_perm;\n";
         std::vector<RelationEdge*>& associations,
         std::vector<TransformEdge*>& transforms)
     {
+        this->openStream(this->outputPath);
         // Kernel code - Architecture dependant
         // CMake (also has write for now?)
         initCMake();
