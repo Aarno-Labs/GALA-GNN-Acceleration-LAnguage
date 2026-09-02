@@ -123,6 +123,13 @@ public:
             "#include <codegen/evaluator.h>\n";
         importCode.addCode(importBase);
 
+        // Row-loop chunk size for dynamic OpenMP scheduling (degree skew makes
+        // static partitions unbalanced); GALA_CPU_CHUNK overrides the default.
+        std::string chunkFn = "\nstatic inline int gala_cpu_chunk() {\n"
+            "  static int c = [] { const char *e = std::getenv(\"GALA_CPU_CHUNK\"); int v = e ? atoi(e) : 64; return v > 0 ? v : 64; }();\n"
+            "  return c;\n}\n";
+        kernelCode.addCode(chunkFn);
+
         if (GALAFEContext::print_memory)
         {
             std::string memFn = "\nint printMemoryUsage() {\n"
@@ -179,7 +186,7 @@ public:
             "  for (int t = 0; t < segments; t++) {\n"
             "    const int *off = offset_ptr + (int64_t)t * (nrows + 1);\n"
             "    const float *vals = val_ptr + bounds_ptr[2 * t];\n"
-            "#pragma omp parallel for schedule(dynamic, 256)\n"
+            "#pragma omp parallel for schedule(dynamic, gala_cpu_chunk())\n"
             "    for (int i = 0; i < nrows; i++) {\n"
             "      float acc = 1e-12f;\n"
             "      for (int e = off[i]; e < off[i + 1]; e++) acc += vals[e];\n"
@@ -207,7 +214,7 @@ public:
             "  for (int t = 0; t < segments; t++) {\n"
             "    const int *off = offset_ptr + (int64_t)t * (nrows + 1);\n"
             "    float *vals = val_ptr + bounds_ptr[2 * t];\n"
-            "#pragma omp parallel for schedule(dynamic, 256)\n"
+            "#pragma omp parallel for schedule(dynamic, gala_cpu_chunk())\n"
             "    for (int i = 0; i < nrows; i++) {\n"
             "      const float r = row_val_ptr[i];\n"
             "      for (int e = off[i]; e < off[i + 1]; e++) vals[e] *= r;\n"
@@ -261,7 +268,7 @@ public:
                         "    const int *cols = col_ptr;\n"
                         "    const float *vals = val_ptr;\n";
             }
-            call += "#pragma omp parallel for schedule(dynamic, 64)\n"
+            call += "#pragma omp parallel for schedule(dynamic, gala_cpu_chunk())\n"
                     "    for (int64_t i = 0; i < nrows; i++) {\n"
                     "      float *o = oden_array + i * dcols;\n"
                     "      for (int e = off[i]; e < off[i + 1]; e++) {\n"
@@ -297,12 +304,12 @@ public:
                 "  const float *iden_ptr1 = a_c.data_ptr<float>();\n"
                 "  const float *iden_ptr2 = b_c.data_ptr<float>();\n"
                 "  auto options = torch::TensorOptions().dtype(torch::kFloat).requires_grad(true);\n"
-                "  auto output_sparse = torch::zeros({nvals}, options);\n"
+                "  auto output_sparse = torch::empty({nvals}, options);\n"
                 "  float *oden_array = output_sparse.data_ptr<float>();\n"
                 "  const int *offset_ptr = offset_graph.data_ptr<int>();\n"
                 "  const int *col_ptr = columns_graph.data_ptr<int>();\n";
             std::string loop =
-                "#pragma omp parallel for schedule(dynamic, 256)\n"
+                "#pragma omp parallel for schedule(dynamic, gala_cpu_chunk())\n"
                 "    for (int64_t i = 0; i < nrows; i++) {\n"
                 "      const float a = iden_ptr1[i];\n"
                 "      for (int e = off[i]; e < off[i + 1]; e++) {\n"
@@ -355,7 +362,7 @@ public:
                 "  for (int t = 0; t < segments; t++) {\n"
                 "    const int *off = offset_ptr + (int64_t)t * (nrows + 1);\n"
                 "    const float *vals = val_ptr + bounds_ptr[2 * t];\n"
-                "#pragma omp parallel for schedule(dynamic, 256)\n"
+                "#pragma omp parallel for schedule(dynamic, gala_cpu_chunk())\n"
                 "    for (int i = 0; i < nrows; i++) {\n"
                 "      float m = row_max[i];\n"
                 "      for (int e = off[i]; e < off[i + 1]; e++) m = std::max(m, vals[e]);\n"
@@ -365,7 +372,7 @@ public:
                 "  for (int t = 0; t < segments; t++) {\n"
                 "    const int *off = offset_ptr + (int64_t)t * (nrows + 1);\n"
                 "    float *vals = val_ptr + bounds_ptr[2 * t];\n"
-                "#pragma omp parallel for schedule(dynamic, 256)\n"
+                "#pragma omp parallel for schedule(dynamic, gala_cpu_chunk())\n"
                 "    for (int i = 0; i < nrows; i++) {\n"
                 "      const float m = row_max[i];\n"
                 "      for (int e = off[i]; e < off[i + 1]; e++) vals[e] -= m;\n"
@@ -391,7 +398,7 @@ public:
                 "  const float *iden_ptr1 = a_c.data_ptr<float>();\n"
                 "  const float *iden_ptr2 = b_c.data_ptr<float>();\n"
                 "  auto options = torch::TensorOptions().dtype(torch::kFloat).requires_grad(true);\n"
-                "  auto output_sparse = torch::zeros({nvals}, options);\n"
+                "  auto output_sparse = torch::empty({nvals}, options);\n"
                 "  float *oden_array = output_sparse.data_ptr<float>();\n"
                 "  const int *offset_ptr = offset_graph.data_ptr<int>();\n"
                 "  const int *col_ptr = columns_graph.data_ptr<int>();\n"
@@ -400,7 +407,7 @@ public:
                 "    const int *off = offset_ptr + (int64_t)t * (nrows + 1);\n"
                 "    const int *cols = col_ptr + bounds_ptr[2 * t];\n"
                 "    float *out = oden_array + bounds_ptr[2 * t];\n"
-                "#pragma omp parallel for schedule(dynamic, 256)\n"
+                "#pragma omp parallel for schedule(dynamic, gala_cpu_chunk())\n"
                 "    for (int i = 0; i < nrows; i++) {\n"
                 "      const float a = iden_ptr1[i];\n"
                 "      for (int e = off[i]; e < off[i + 1]; e++) out[e] = a + iden_ptr2[cols[e]];\n"
@@ -419,7 +426,7 @@ public:
                 "  const float *iden_ptr1 = a_c.data_ptr<float>();\n"
                 "  const float *iden_ptr2 = b_c.data_ptr<float>();\n"
                 "  auto options = torch::TensorOptions().dtype(torch::kFloat).requires_grad(true);\n"
-                "  auto output_sparse = torch::zeros({nvals}, options);\n"
+                "  auto output_sparse = torch::empty({nvals}, options);\n"
                 "  float *oden_array = output_sparse.data_ptr<float>();\n"
                 "  const int *offset_ptr = offset_graph.data_ptr<int>();\n"
                 "  const int *col_ptr = columns_graph.data_ptr<int>();\n"
@@ -428,7 +435,7 @@ public:
                 "    const int *off = offset_ptr + (int64_t)t * (nrows + 1);\n"
                 "    const int *cols = col_ptr + bounds_ptr[2 * t];\n"
                 "    float *out = oden_array + bounds_ptr[2 * t];\n"
-                "#pragma omp parallel for schedule(dynamic, 64)\n"
+                "#pragma omp parallel for schedule(dynamic, gala_cpu_chunk())\n"
                 "    for (int i = 0; i < nrows; i++) {\n"
                 "      const float *ai = iden_ptr1 + i * dcols;\n"
                 "      for (int e = off[i]; e < off[i + 1]; e++) {\n"
