@@ -1599,6 +1599,13 @@ forward(torch::Tensor t_iden";
 }\n";
                 model.getPreCall()->addCode(initCode);
 
+                // Differential-testing hook: GALA_SAVE_INIT=<file> saves the freshly
+                // initialized parameters; GALA_LOAD_INIT=<file> replaces them, so two
+                // backends can be run from identical weights and compared epoch by epoch.
+                std::string initHook = "if (const char *p = std::getenv(\"GALA_SAVE_INIT\")) { torch::save(net, p); }\n\
+if (const char *p = std::getenv(\"GALA_LOAD_INIT\")) { torch::load(net, p, device); }\n";
+                model.getPreCall()->addCode(initHook);
+
                 if (loopNode->getOptimizer() == ADAM)
                 {
                     std::string optmCode = "torch::optim::Adam optimizer(\n\
