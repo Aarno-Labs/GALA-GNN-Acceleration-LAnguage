@@ -10,6 +10,11 @@
 #include <iterator>
 #include <tests/common.h>
 #include <torch/torch.h>
+#ifdef GALA_CUDA
+#include <c10/cuda/CUDACachingAllocator.h>
+#else
+#include <sys/resource.h>
+#endif
 #include <vector>
 
 template <typename M> class Evaluator {
@@ -27,6 +32,7 @@ private:
   std::vector<double> train_timing_ends;
 
 // Device memory in use (MiB): GPU allocation on CUDA builds, resident set size on CPU builds.
+// Reported as "model_init" (after initialization) and "training" (after training).
 int gpuMemoryUsage() {
 #ifdef GALA_CUDA
   size_t freeMem, totalMem;
@@ -174,6 +180,22 @@ public:
     std::cout << std::endl;
     std::cout << "model_init " << begin_mem << std::endl;
     std::cout << "training " << end_mem << std::endl;
+    // Peak memory over the whole run: CUDA caching-allocator statistics on GPU
+    // builds (peak bytes allocated to tensors / peak bytes reserved from the
+    // device), maximum resident set size on CPU builds.
+#ifdef GALA_CUDA
+    {
+      auto stats = c10::cuda::CUDACachingAllocator::getDeviceStats(0);
+      std::cout << "peak_allocated_mib " << stats.allocated_bytes[0].peak / (1024 * 1024) << std::endl;
+      std::cout << "peak_reserved_mib " << stats.reserved_bytes[0].peak / (1024 * 1024) << std::endl;
+    }
+#else
+    {
+      struct rusage ru;
+      if (getrusage(RUSAGE_SELF, &ru) == 0)
+        std::cout << "peak_rss_mib " << ru.ru_maxrss / 1024 << std::endl;
+    }
+#endif
   }
 };
 
